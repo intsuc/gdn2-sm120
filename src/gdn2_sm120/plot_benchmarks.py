@@ -16,6 +16,12 @@ MODE_TITLES = {
     "token-forward": "Token forward",
 }
 
+_CHUNK_DATA_TOP_FRACTION = 0.69
+_CHUNK_RAIL_BOTTOM = 0.735
+_CHUNK_CUTE_ROW_Y = 0.775
+_CHUNK_TRITON_ROW_Y = 0.855
+_CHUNK_SPEEDUP_ROW_Y = 0.945
+
 
 @dataclass(frozen=True)
 class BenchmarkPoint:
@@ -246,14 +252,25 @@ def _plot_chunk_panel(
     *,
     log_latency: bool = False,
 ) -> None:
+    from matplotlib.patches import Rectangle
+
     cute_color = "#2563EB"
     triton_color = "#475569"
     xs = [math.log2(point.time) for point in points]
     cute = [point.cute_median_us for point in points]
     triton = [point.triton_median_us for point in points]
     maximum = max((*cute, *triton))
+    minimum = min((*cute, *triton))
 
-    axis.plot(xs, cute, color=cute_color, marker="o", linewidth=2.4, label="CuTe SM120")
+    axis.plot(
+        xs,
+        cute,
+        color=cute_color,
+        marker="o",
+        linewidth=2.4,
+        label="CuTe SM120",
+        zorder=3,
+    )
     axis.plot(
         xs,
         triton,
@@ -261,46 +278,12 @@ def _plot_chunk_panel(
         marker="s",
         linewidth=2.2,
         label="Official Triton",
+        zorder=3,
     )
-    for index, (x, point) in enumerate(zip(xs, points, strict=True)):
+    for x, point in zip(xs, points, strict=True):
         low = min(point.cute_median_us, point.triton_median_us)
         high = max(point.cute_median_us, point.triton_median_us)
-        axis.vlines(x, low, high, color="#CBD5E1", linewidth=1.0, zorder=0)
-        axis.annotate(
-            f"{point.cute_median_us:.1f}",
-            (x, point.cute_median_us),
-            xytext=(0, -14),
-            textcoords="offset points",
-            ha="center",
-            color=cute_color,
-            fontsize=8.5,
-        )
-        axis.annotate(
-            f"{point.triton_median_us:.1f}",
-            (x, point.triton_median_us),
-            xytext=(0, 7),
-            textcoords="offset points",
-            ha="center",
-            color=triton_color,
-            fontsize=8.5,
-        )
-        label, color = _speedup_label(point.speedup)
-        if log_latency:
-            # Ten-point long-sequence sweeps need two label rows; a single row
-            # makes adjacent 1.xx labels read as one continuous string.
-            speedup_y = maximum * (1.29 + 0.21 * (index % 2 if len(points) > 6 else 0))
-        else:
-            speedup_y = maximum * 1.16
-        axis.text(
-            x,
-            speedup_y,
-            label,
-            ha="center",
-            va="center",
-            color=color,
-            fontsize=7.5 if log_latency else 9,
-            fontweight="bold",
-        )
+        axis.vlines(x, low, high, color="#CBD5E1", linewidth=1.0, zorder=1)
 
     for left, right in zip(points, points[1:], strict=False):
         if (left.speedup - 1.0) * (right.speedup - 1.0) < 0.0:
@@ -316,21 +299,115 @@ def _plot_chunk_panel(
         rotation_mode="anchor",
     )
     axis.set_xlabel("Sequence length T (log₂ spacing)")
+
+    # Keep every observation below a fixed three-row label rail. Computing the
+    # limit in the scale's coordinate space preserves the same separation for
+    # either chunk panel despite their different latency ranges.
     if log_latency:
-        minimum = min((*cute, *triton))
         axis.set_yscale("log", base=2)
-        first_power = math.floor(math.log2(minimum))
-        last_power = math.ceil(math.log2(maximum))
-        ticks = [2.0**power for power in range(first_power, last_power + 1)]
+        lower_power = math.floor(math.log2(minimum)) - 0.45
+        maximum_power = math.log2(maximum)
+        upper_power = lower_power + (maximum_power - lower_power) / _CHUNK_DATA_TOP_FRACTION
+        ticks = [
+            2.0**power for power in range(math.ceil(lower_power), math.floor(maximum_power) + 1)
+        ]
         axis.set_yticks(ticks, [f"{tick:g}" for tick in ticks])
         axis.set_ylabel("Median latency (µs / call, log₂ scale)")
-        axis.set_ylim(2.0 ** (first_power - 0.45), maximum * 1.72)
+        axis.set_ylim(2.0**lower_power, 2.0**upper_power)
         axis.grid(axis="y", which="major", color="#E2E8F0", linewidth=0.8)
     else:
         axis.set_ylabel("Median latency (µs / call)")
-        axis.set_ylim(0.0, maximum * 1.27)
+        axis.set_ylim(0.0, maximum / _CHUNK_DATA_TOP_FRACTION)
         axis.grid(axis="y", color="#E2E8F0", linewidth=0.8)
     axis.set_axisbelow(True)
+
+    # Values use predictable rows keyed with the same marker shapes and colors
+    # as the series. The opaque rail keeps labels separate from every data line.
+    axis.add_patch(
+        Rectangle(
+            (0.0, _CHUNK_RAIL_BOTTOM),
+            1.0,
+            1.0 - _CHUNK_RAIL_BOTTOM,
+            transform=axis.transAxes,
+            facecolor="white",
+            edgecolor="none",
+            zorder=5,
+            gid="chunk-value-rail",
+        )
+    )
+    for y in (_CHUNK_RAIL_BOTTOM, 0.815, 0.895):
+        axis.plot(
+            [0.0, 1.0],
+            [y, y],
+            transform=axis.transAxes,
+            color="#E2E8F0",
+            linewidth=0.75,
+            zorder=6,
+            clip_on=False,
+        )
+
+    for symbol, y, color, size in (
+        ("×", _CHUNK_SPEEDUP_ROW_Y, "#166534", 8.2),
+        ("■", _CHUNK_TRITON_ROW_Y, triton_color, 7.2),
+        ("●", _CHUNK_CUTE_ROW_Y, cute_color, 7.2),
+    ):
+        axis.text(
+            -0.012,
+            y,
+            symbol,
+            transform=axis.transAxes,
+            ha="right",
+            va="center",
+            color=color,
+            fontsize=size,
+            fontweight="bold" if symbol == "×" else "normal",
+            zorder=7,
+            clip_on=False,
+            gid="chunk-rail-key",
+        )
+
+    rail_transform = axis.get_xaxis_transform()
+    for x, point in zip(xs, points, strict=True):
+        speedup_label, speedup_color = _speedup_label(point.speedup)
+        for text, y, color, size, weight in (
+            (speedup_label, _CHUNK_SPEEDUP_ROW_Y, speedup_color, 7.8, "bold"),
+            (
+                f"{point.triton_median_us:.1f}",
+                _CHUNK_TRITON_ROW_Y,
+                triton_color,
+                7.7,
+                "normal",
+            ),
+            (
+                f"{point.cute_median_us:.1f}",
+                _CHUNK_CUTE_ROW_Y,
+                cute_color,
+                7.7,
+                "normal",
+            ),
+        ):
+            axis.text(
+                x,
+                y,
+                text,
+                transform=rail_transform,
+                ha="center",
+                va="center",
+                color=color,
+                fontsize=size,
+                fontweight=weight,
+                zorder=7,
+                gid="chunk-rail-label",
+            )
+        axis.plot(
+            [x, x],
+            [_CHUNK_RAIL_BOTTOM - 0.012, _CHUNK_RAIL_BOTTOM + 0.012],
+            transform=rail_transform,
+            color="#CBD5E1",
+            linewidth=0.8,
+            zorder=7,
+            clip_on=False,
+        )
 
 
 def _plot_token_panel(axis: Any, points: list[BenchmarkPoint]) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -163,3 +164,56 @@ def test_renders_headless_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert image.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(image) > 10_000
     assert chunk_scales == {"Chunk forward": "log", "Chunk backward": "log"}
+
+
+def test_chunk_values_render_in_a_rail_above_the_data() -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
+    suite = load_benchmarks([source])
+
+    for mode in ("chunk-forward", "chunk-backward"):
+        points = [point for point in suite.points if point.mode == mode]
+        figure, axis = plt.subplots()
+        try:
+            plot_benchmarks._plot_chunk_panel(axis, points, mode, log_latency=True)
+            figure.canvas.draw()
+
+            rail = next(patch for patch in axis.patches if patch.get_gid() == "chunk-value-rail")
+            rail_bottom = min(
+                axis.transAxes.inverted().transform(rail.get_transform().transform(vertex))[1]
+                for vertex in rail.get_path().vertices
+            )
+
+            series = [
+                line for line in axis.lines if line.get_label() in {"CuTe SM120", "Official Triton"}
+            ]
+            data_top = max(
+                axis.transAxes.inverted().transform(line.get_transform().transform((x, y)))[1]
+                for line in series
+                for x, y in zip(line.get_xdata(), line.get_ydata(), strict=True)
+            )
+            assert data_top < rail_bottom
+
+            labels = [text for text in axis.texts if text.get_gid() == "chunk-rail-label"]
+            actual = Counter(text.get_text() for text in labels)
+            expected = Counter(
+                label
+                for point in points
+                for label in (
+                    plot_benchmarks._speedup_label(point.speedup)[0],
+                    f"{point.triton_median_us:.1f}",
+                    f"{point.cute_median_us:.1f}",
+                )
+            )
+            assert actual == expected
+            assert all(
+                axis.transAxes.inverted().transform(
+                    text.get_transform().transform(text.get_position())
+                )[1]
+                > rail_bottom
+                for text in labels
+            )
+        finally:
+            plt.close(figure)
