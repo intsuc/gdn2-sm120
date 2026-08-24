@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import gdn2_sm120.plot_benchmarks as plot_benchmarks
 from gdn2_sm120.plot_benchmarks import load_benchmarks, render_benchmarks
 
 
@@ -58,6 +59,7 @@ def _three_mode_suite(path: Path) -> None:
         [
             _record("token-forward", 1, heads=32, cute_us=21.0, triton_us=25.2),
             _record("chunk-backward", 16, cute_us=112.0, triton_us=277.0),
+            _record("chunk-backward", 16384, cute_us=5810.6, triton_us=6353.5),
             _record("chunk-forward", 64, cute_us=64.0, triton_us=185.0),
             _record("chunk-forward", 16, cute_us=43.5, triton_us=189.7),
         ],
@@ -74,6 +76,7 @@ def test_loads_and_sorts_current_suite(tmp_path: Path) -> None:
         ("chunk-forward", 16),
         ("chunk-forward", 64),
         ("chunk-backward", 16),
+        ("chunk-backward", 16384),
         ("token-forward", 1),
     ]
     assert suite.points[0].speedup == pytest.approx(189.7 / 43.5)
@@ -138,14 +141,25 @@ def test_rejects_nonfinite_latency(tmp_path: Path) -> None:
         load_benchmarks([source])
 
 
-def test_renders_headless_png(tmp_path: Path) -> None:
+def test_renders_headless_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("matplotlib")
     source = tmp_path / "suite.json"
     destination = tmp_path / "plot.png"
     _three_mode_suite(source)
+
+    chunk_scales: dict[str, str] = {}
+    plot_chunk_panel = plot_benchmarks._plot_chunk_panel
+
+    def capture_chunk_scale(*args: object, **kwargs: object) -> None:
+        plot_chunk_panel(*args, **kwargs)
+        axis, _, title = args
+        chunk_scales[str(title)] = str(axis.get_yscale())
+
+    monkeypatch.setattr(plot_benchmarks, "_plot_chunk_panel", capture_chunk_scale)
 
     render_benchmarks(load_benchmarks([source]), destination)
 
     image = destination.read_bytes()
     assert image.startswith(b"\x89PNG\r\n\x1a\n")
     assert len(image) > 10_000
+    assert chunk_scales == {"Chunk forward": "log", "Chunk backward": "log"}

@@ -227,29 +227,44 @@ def test_chunk_forward_long_k_split_uses_current_stream(time: int, dtype: torch.
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("time", [19, 32, 1024])
-def test_chunk_forward_aux_includes_exact_state_boundaries(time: int) -> None:
+@pytest.mark.parametrize(
+    ("time", "dtype"),
+    [(19, torch.bfloat16), (32, torch.bfloat16), (1024, torch.bfloat16), (128, torch.float16)],
+)
+def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
+    time: int, dtype: torch.dtype
+) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
-    args = _inputs(time, heads=1)
+    args = _inputs(time, dtype=dtype, heads=1)
     output, final_state, aux = chunk_forward(*args[:6], args[6], scale=0.125, return_aux=True)
     torch.cuda.synchronize()
 
     assert aux.state_boundaries.shape == (1, (time + 15) // 16 + 1, 1, 128, 128)
-    assert aux.state_boundaries.dtype == torch.float32
+    expected_boundary_dtype = (
+        args[0].dtype
+        if args[0].dtype == torch.bfloat16 and time >= 128 and time % 16 == 0
+        else torch.float32
+    )
+    assert aux.state_boundaries.dtype == expected_boundary_dtype
+    expected_wy_dtype = args[0].dtype if time >= 128 and time % 16 == 0 else torch.float32
     assert all(
-        tensor.dtype == torch.float32
+        tensor.dtype == expected_wy_dtype
         for tensor in (
             aux.y,
-            aux.u,
             aux.q_gamma,
             aux.k_tail,
-            aux.decay_end,
             aux.aqk,
         )
     )
-    torch.testing.assert_close(aux.state_boundaries[:, 0], args[6], atol=0, rtol=0)
-    torch.testing.assert_close(aux.state_boundaries[:, -1], final_state, atol=0, rtol=0)
+    assert aux.u.dtype == torch.float32
+    assert aux.decay_end.dtype == torch.float32
+    torch.testing.assert_close(
+        aux.state_boundaries[:, 0], args[6].to(expected_boundary_dtype), atol=0, rtol=0
+    )
+    torch.testing.assert_close(
+        aux.state_boundaries[:, -1], final_state.to(expected_boundary_dtype), atol=0, rtol=0
+    )
 
     expected_output, expected_final_state = chunkwise_forward_reference(
         *args[:6], args[6], scale=0.125, chunk_size=16
@@ -279,7 +294,7 @@ def test_chunk_forward_aux_includes_exact_state_boundaries(time: int) -> None:
     boundary_atol = 1e-3 if time % 16 == 0 else 2e-4
     boundary_rtol = 3e-2 if time % 16 == 0 else 2e-3
     torch.testing.assert_close(
-        aux.state_boundaries,
+        aux.state_boundaries.float(),
         expected,
         atol=boundary_atol,
         rtol=boundary_rtol,

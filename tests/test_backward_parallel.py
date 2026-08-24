@@ -252,7 +252,8 @@ def test_cute_parallel_chunk_vjp_matches_proven_reference() -> None:
 @pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=["bf16", "fp16"])
-def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype) -> None:
+@pytest.mark.parametrize("compact_aux", [False, True], ids=["fp32-aux", "compact-aux"])
+def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype, compact_aux: bool) -> None:
     generator = torch.Generator(device="cuda").manual_seed(812_800)
     shape = (1, 128, 1, 128)
     state_shape = (1, 1, 128, 128)
@@ -268,7 +269,26 @@ def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype) -> None:
     d_final_state = (
         torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.1
     )
-    aux = build_wy_boundary_aux_reference(q, k, g, beta, scale=0.125, chunk_size=16)
+    if compact_aux:
+        v = (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype)
+        w = torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype)
+        initial_state = (
+            torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.03
+        )
+        _, _, aux = chunk_forward(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            w,
+            initial_state,
+            scale=0.125,
+            return_aux=True,
+        )
+        assert aux.y.dtype == dtype
+    else:
+        aux = build_wy_boundary_aux_reference(q, k, g, beta, scale=0.125, chunk_size=16)
     expected, expected_d_residual = boundary_dstate_wy_reference(
         aux,
         do,
@@ -278,13 +298,16 @@ def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype) -> None:
     )
 
     default_result = wy_boundary_dstate(aux, do, d_final_state)
-    actual, d_residual = wy_boundary_dstate(
-        aux,
-        do,
-        d_final_state,
-        return_d_residual=True,
-    )
-    torch.cuda.synchronize()
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        actual, d_residual = wy_boundary_dstate(
+            aux,
+            do,
+            d_final_state,
+            return_d_residual=True,
+        )
+    stream.synchronize()
 
     atol = 4e-4 if dtype == torch.bfloat16 else 5e-5
     assert isinstance(default_result, torch.Tensor)
@@ -292,6 +315,28 @@ def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype) -> None:
     torch.testing.assert_close(actual, expected, atol=atol, rtol=2e-3)
     residual_atol = 1e-3 if dtype == torch.bfloat16 else 2e-4
     torch.testing.assert_close(d_residual, expected_d_residual, atol=residual_atol, rtol=3e-3)
+
+    if dtype == torch.bfloat16 and compact_aux:
+        with torch.cuda.stream(stream):
+            compact, compact_residual, exact_d_initial = wy_boundary_dstate(
+                aux,
+                do,
+                d_final_state,
+                return_d_residual=True,
+                compact_boundaries=True,
+            )
+        stream.synchronize()
+        assert compact.dtype == dtype
+        assert compact_residual.dtype == dtype
+        assert exact_d_initial.dtype == torch.float32
+        torch.testing.assert_close(exact_d_initial, actual[:, 0], atol=0, rtol=0)
+        torch.testing.assert_close(compact.float(), actual, atol=2e-2, rtol=3e-2)
+        torch.testing.assert_close(
+            compact_residual.float(),
+            expected_d_residual,
+            atol=4e-3,
+            rtol=3e-3,
+        )
 
 
 @pytest.mark.cuda

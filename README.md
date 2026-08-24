@@ -73,11 +73,13 @@ variable-length sequences, and fused gate activation are not yet part of this
 first specialization. Unsupported devices and shapes fail explicitly; there
 is no silent fallback.
 
-For gradient-enabled calls of 64 tokens or more, the forward saves exact FP32
-states at every BT=16 boundary. Backward uses those checkpoints instead of
-inverting the complete sequence from a rounded final state. At 128 tokens and
-above it dispatches to a compact-WY tensor-core VJP; partial final chunks are
-supported. Forward-only calls do not allocate these training checkpoints.
+For gradient-enabled calls of 64 tokens or more, the forward saves states at
+every BT=16 boundary. BF16 full chunks at T>=128 use compact BF16 `S`/`dS`
+checkpoints, while the reverse scan preserves the exact FP32 `dS0` separately;
+FP16, T=64--127, and partial-tail paths retain FP32 boundaries. Backward uses
+these local checkpoints instead of inverting the complete sequence from one
+rounded final state. At 128 tokens and above it dispatches to a compact-WY
+tensor-core VJP. Forward-only calls do not allocate training checkpoints.
 
 ## Benchmark against the official Triton implementation
 
@@ -130,8 +132,10 @@ Representative BF16 medians on the target workstation are:
 | chunk forward | B1 T512 H16 | 65.9 us | 181.6 us | **2.76x** |
 | chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
 | chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
-| chunk backward | B1 T16 H16 | 111.9 us | 274.3 us | **2.45x** |
-| chunk backward | B1 T256 H16 | 207.0 us | 276.7 us | **1.34x** |
+| chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
+| chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
+| chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
+| chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
 | token forward | B1 T1 H32 | 21.0 us | 25.8 us | **1.23x** |
 
 ## Why FROST is not copied directly
@@ -144,6 +148,15 @@ accumulators, warp shuffles, value/key partitioning, and
 `MmaF16BF16Op` warp MMA. The forward state scan and the long-sequence backward
 therefore use a schedule designed for SM120 rather than a direct FROST port.
 
+For long BF16 training, Y, Q-gamma, K-tail, A-qk, and the persistent E/K-bar
+MMA operands use BF16, while U, chunk decay, and gamma remain FP32. Backward
+first precomputes every independent `A_qk.T @ dO` product, then runs a reverse
+boundary scan with 128-bit `cp.async` staging and shuffle-cached decay. It
+emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32. The
+chunk-local compact-WY graph combines paired products and producer epilogues
+into 12 launches, or 11 at T>=2048 on the full-chunk BF16 path where the
+state/gradient decay dot is folded into a large state-product kernel.
+
 The implementation is independently derived from the paper's equations. No
 source from the official GDN2 repository (NVIDIA Source Code License-NC) is
 vendored or copied. FROST and CUTLASS are referenced at fixed revisions in
@@ -155,13 +168,13 @@ This is an alpha, shape-specialized kernel project rather than a drop-in
 replacement for every official option. The primary production shape
 `K=V=128` is implemented and numerically checked in BF16/FP16, including FP32
 log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
-and non-default CUDA streams. In the measured B1/H16 BF16 sweep, chunk forward
-remains faster than the official path at every sampled length through T=16384;
-backward-only is faster through T=256. At T=512, backward-only is slower, while
-the measured combined forward+backward call remains 1.25x faster because the
-forward path is much faster. The checkpointed path trades memory for speed: its
-T512 measured peak allocation delta is about 132 MiB versus 70 MiB for the
-official path. Additional dimensions, packed sequences, and reducing the T512
-backward workspace/launch count remain optimization work.
+and non-default CUDA streams. In the measured B1/H16 BF16 sweep, both chunk
+forward and chunk backward remain faster than the official path at every
+sampled length through T=16384. Backward speedup ranges from 2.45x at T=16 to
+1.09x at T=16384. The checkpointed path trades memory for speed: compact BF16
+boundaries halve checkpoint bytes relative to FP32, but the CuTe path still
+retains both boundary sets and compact-WY workspace and therefore uses more
+memory than the official path. Additional dimensions, packed sequences, and
+further reducing checkpoint memory remain optimization work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

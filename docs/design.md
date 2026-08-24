@@ -63,10 +63,13 @@ contract because a rearranged intermediate can overflow before a later
 algebraic cancellation.
 
 Forward-only calls use compact FP16/BF16 intermediates that are not exposed. A
-gradient-enabled call that selects the checkpointed backward asks the same
-kernel for FP32 auxiliaries and exact FP32 state boundaries. The chunk size
-differs from the official Triton path's C=64 because BT=16 exposes more CTAs
-and stays below the SM120 shared-memory limit.
+gradient-enabled full-chunk call at T>=128 checkpoints Y, Q-gamma, K-tail, and
+A-qk in the input dtype because every downstream tensor-core consumer would
+immediately narrow them to that dtype. U and chunk decay remain FP32. BF16 full
+chunks also store compact BF16 state boundaries; FP16, short, and partial-tail
+training calls retain FP32 boundaries. The chunk size differs from the official
+Triton path's C=64 because BT=16 exposes more CTAs and stays below the SM120
+shared-memory limit.
 
 ## Backward
 
@@ -81,23 +84,29 @@ S_previous = Diag(exp(-g)) X
 ```
 
 This remains the lowest-overhead path below T=64. At T=64 and above, forward
-saves every FP32 BT=16 boundary. A compact-WY boundary scan computes both the
+saves every BT=16 boundary. A compact-WY boundary scan computes both the
 reverse state boundaries and
 
 ```text
 dR = K_tail dS_next + A_qk.T dO
 ```
 
-using a K-split eight-warp MMA schedule. T=64 through T=127 use independent
-chunk-local token VJPs, whose inverse reconstruction is reset from an exact
-boundary after at most 16 tokens.
+using a K-split eight-warp MMA schedule. Its persistent state remains FP32 in
+registers; the long BF16 path stores forward/reverse checkpoints in BF16 and
+returns the exact FP32 initial-state gradient separately. T=64 through T=127
+use independent chunk-local token VJPs, whose inverse reconstruction is reset
+from an FP32 boundary after at most 16 tokens.
 
 At T>=128, the parameter VJP uses the full compact-WY graph. For each chunk it
 forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`, `dK_bar`, and the
-reverse cumulative gate gradient through 18 ordered CuTe launches. The large
-`16x128` and `16x16` products use warp MMA; the triangular transpose solve and
-gate chain remain FP32. The boundary scan stores `dR`, avoiding two duplicate
-matrix products in this stage.
+reverse cumulative gate gradient through 12 ordered CuTe launches. At T>=2048
+the state-decay dot is folded into the shared-S0 product, reducing this to 11.
+Dual-output S0/square products, paired K16 products, and producer epilogues
+remove redundant reads and launch boundaries. The large `16x128` and `16x16`
+products use warp MMA; the triangular transpose solve and gate chain accumulate
+in FP32. The boundary scan stores `dR`, avoiding two duplicate matrix products;
+compact BF16 scans round only the returned `dR` while keeping the ordered
+boundary recurrence and its precompute scratch in FP32.
 
 The inverse requires `1 - (beta * k).T @ k` to remain nonzero. With normalized
 keys and erase gates below one this is the usual delta-rule operating region.
@@ -106,21 +115,16 @@ per-token singularity check; maintaining this condition is the caller's
 responsibility.
 
 Reverse reconstruction cannot recover information lost when a complete long
-sequence is inverted from one rounded final state. Exact boundary checkpoints
-remove that instability and the public autograd path no longer has a sequence
-length cap. Tensor-core operands, including FP32 auxiliaries, are narrowed to
-the input dtype in shared memory, so the long VJP is a controlled
-low-precision approximation rather than a bit-exact FP32 VJP. Tests through
-T=512 require relative L2 error below 1% and maximum absolute error below
-`5e-3`; observed maxima are about 0.5% and `3.91e-3` against the official
-implementation.
+sequence is inverted from one rounded final state. Chunk checkpoints bound
+that instability and the public autograd path no longer has a sequence-length
+cap. Tensor-core operands and long BF16 checkpoints are stored or narrowed to
+the input dtype, so the long VJP is a controlled low-precision approximation
+rather than a bit-exact FP32 VJP. Tests require per-gradient relative L2 error
+below 1% and maximum absolute error below `5e-3`; measured official comparisons
+through T=16384 remain within `3.91e-3` maximum absolute error.
 
-For B1/T512/H16, the compact-WY stage uses about 24 MiB of lifetime-colored
-sequence workspace plus 1.5 MiB of square workspace. Including saved
-boundaries, auxiliaries, reverse boundaries, and outputs, the measured complete
-call peaks about 132 MiB above its input baseline, versus 70 MiB for the
-official path. Reducing that memory ratio and fusing the 18 stages are the next
-backward targets.
+For B1/T512/H16, the compact-WY stage uses about 22 MiB of lifetime-colored
+sequence workspace plus 1.5 MiB of square workspace.
 
 ## Token forward
 

@@ -3,15 +3,18 @@
 The production backward can expose sequence-length parallelism by splitting
 the work into three stages:
 
-1. save the exact FP32 state at every BT=16 forward boundary;
+1. save the state at every BT=16 forward boundary;
 2. scan only the boundary state gradients in reverse;
-3. launch every chunk independently from its exact state and ``dS_end`` boundaries.
+3. launch every chunk independently from its local state and ``dS_end`` boundaries.
 
 The dimension-generic PyTorch functions provide an executable proof of the
 decomposition.  The CuTe kernels implement both the boundary scan and the
 independent parameter VJPs for the production ``K == V == 128`` shape, using
-the compact-WY tensors and exact state checkpoints already produced by
-``chunk_forward(return_aux=True)``.
+the compact-WY tensors and state checkpoints already produced by
+``chunk_forward(return_aux=True)``.  The reference decomposition keeps FP32
+checkpoints.  Production BF16 full chunks at T>=128 compact both forward and
+reverse checkpoints to BF16 while preserving the exact initial-state gradient
+in a separate FP32 tensor; other paths retain FP32 checkpoints.
 
 For one chunk, the forward map is
 
@@ -53,6 +56,9 @@ _BOUNDARY_VALUE_TILE = _BOUNDARY_WARPS
 _BOUNDARY_MMA_WARPS = _DIM // 16
 _BOUNDARY_MMA_THREADS = 32 * _BOUNDARY_MMA_WARPS
 _BOUNDARY_MMA_VALUE_TILE = 8
+_AQK_PRECOMPUTE_WARPS = 8
+_AQK_PRECOMPUTE_THREADS = 32 * _AQK_PRECOMPUTE_WARPS
+_AQK_PRECOMPUTE_VALUES = _AQK_PRECOMPUTE_WARPS * _BOUNDARY_MMA_VALUE_TILE
 _LOCAL_THREADS = 32
 _LOCAL_VALUE_TILE = 8
 _LOCAL_VALUE_TILES = _DIM // _LOCAL_VALUE_TILE
@@ -507,6 +513,94 @@ def _pair_sum(value: cutlass.Float32) -> cutlass.Float32:
 
 
 @cute.kernel
+def _precompute_aqk_do_kernel(
+    aqk: cute.Tensor,
+    do: cute.Tensor,
+    aqk_do: cute.Tensor,
+    n_chunks: cutlass.Constexpr,
+    heads: cutlass.Constexpr,
+    tiled_mma: cute.TiledMma,
+    s_a_layout: cute.Layout,
+    s_b_layout: cute.Layout,
+):
+    """Compute every ``A_qk.T @ dO`` chunk concurrently.
+
+    The boundary scan is ordered over chunks, so performing this state-
+    independent product inside that scan serializes otherwise independent
+    tensor-core work.  One eight-warp CTA reuses a single A_qk tile across 64
+    value columns and writes an FP32 token/value tile for the subsequent scan.
+    """
+
+    tidx, _, _ = cute.arch.thread_idx()
+    block, _, _ = cute.arch.block_idx()
+    lane = tidx & 31
+    warp = tidx >> 5
+    value_ctas = _DIM // _AQK_PRECOMPUTE_VALUES
+    value_cta = block % value_ctas
+    chunk_head = block // value_ctas
+    head = chunk_head % heads
+    batch_chunk = chunk_head // heads
+    chunk = batch_chunk % n_chunks
+    batch = batch_chunk // n_chunks
+    value_tile = value_cta * _AQK_PRECOMPUTE_WARPS + warp
+    start = chunk * _CHUNK_SIZE
+    operand_type = do.element_type
+
+    allocator = cutlass.utils.SmemAllocator()
+    s_a = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
+    s_do_all = allocator.allocate_tensor(operand_type, s_b_layout, byte_alignment=1024)
+    s_do = s_do_all[warp, None, None]
+
+    thr_mma = tiled_mma.get_slice(lane)
+    t_cs_a = thr_mma.partition_A(s_a)
+    t_cr_a = thr_mma.make_fragment_A(t_cs_a)
+    t_cs_do = thr_mma.partition_B(s_do)
+    t_cr_do = thr_mma.make_fragment_B(t_cs_do)
+    copy_atom = cute.make_copy_atom(cute.nvgpu.warp.LdMatrix8x8x16bOp(False, 4), operand_type)
+    tiled_copy_a = cute.make_tiled_copy_A(copy_atom, tiled_mma)
+    tiled_copy_b = cute.make_tiled_copy_B(copy_atom, tiled_mma)
+    thr_copy_a = tiled_copy_a.get_slice(lane)
+    thr_copy_b = tiled_copy_b.get_slice(lane)
+    t_ss_a = thr_copy_a.partition_S(s_a)
+    t_sr_a = thr_copy_a.retile(t_cr_a)
+    t_ss_do = thr_copy_b.partition_S(s_do)
+    t_sr_do = thr_copy_b.retile(t_cr_do)
+
+    # Store A_qk transposed in the MMA A tile.  All eight warps reuse it.
+    if tidx < _CHUNK_SIZE * _CHUNK_SIZE:
+        row = tidx // _CHUNK_SIZE
+        output_row = tidx - row * _CHUNK_SIZE
+        s_a[row, output_row] = aqk[batch, chunk, head, output_row, row].to(operand_type)
+    for linear in cutlass.range(lane, _BOUNDARY_MMA_VALUE_TILE * _CHUNK_SIZE, 32):
+        value_local = linear // _CHUNK_SIZE
+        output_row = linear - value_local * _CHUNK_SIZE
+        value_idx = value_tile * _BOUNDARY_MMA_VALUE_TILE + value_local
+        s_do[value_local, output_row] = do[batch, start + output_row, head, value_idx].to(
+            operand_type
+        )
+    cute.arch.sync_threads()
+
+    cute.copy(tiled_copy_a, t_ss_a[None, None, 0], t_sr_a[None, None, 0])
+    cute.copy(tiled_copy_b, t_ss_do[None, None, 0], t_sr_do[None, None, 0])
+    g_output = cute.local_tile(
+        aqk_do[batch, None, head, None],
+        (_CHUNK_SIZE, _BOUNDARY_MMA_VALUE_TILE),
+        (chunk, value_tile),
+    )
+    t_cg_output = thr_mma.partition_C(g_output)
+    t_cr_output = thr_mma.make_fragment_C(t_cg_output)
+    t_cr_output.fill(0.0)
+    cute.gemm(
+        tiled_mma,
+        t_cr_output,
+        t_cr_a[None, None, 0],
+        t_cr_do[None, None, 0],
+        t_cr_output,
+    )
+    cute.autovec_copy(t_cr_output, t_cg_output)
+
+
+@cute.kernel
 def _wy_boundary_dstate_kernel(
     y: cute.Tensor,
     q_gamma: cute.Tensor,
@@ -597,21 +691,22 @@ def _wy_boundary_dstate_mma_kernel(
     q_gamma: cute.Tensor,
     k_tail: cute.Tensor,
     decay_end: cute.Tensor,
-    aqk: cute.Tensor,
+    aqk_do: cute.Tensor,
     do: cute.Tensor,
     d_final_state: cute.Tensor,
     boundaries: cute.Tensor,
     d_residual: cute.Tensor,
+    d_initial_state: cute.Tensor,
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
+    store_d_initial_state: cutlass.Constexpr,
     tiled_mma: cute.TiledMma,
     s_a_layout: cute.Layout,
     s_state_layout: cute.Layout,
     s_partial_layout: cute.Layout,
     s_b_layout: cute.Layout,
-    s_total_layout: cute.Layout,
 ):
     """K-split tensor-core compact-WY boundary scan for full chunks."""
 
@@ -628,50 +723,85 @@ def _wy_boundary_dstate_mma_kernel(
     operand_type = do.element_type
 
     allocator = cutlass.utils.SmemAllocator()
-    s_a_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
+    s_k_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
+    s_q_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
+    s_y_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
     s_state_all = allocator.allocate_tensor(operand_type, s_state_layout, byte_alignment=1024)
     s_partial_all = allocator.allocate_tensor(
         cutlass.Float32, s_partial_layout, byte_alignment=1024
     )
     s_do = allocator.allocate_tensor(operand_type, s_b_layout, byte_alignment=1024)
     s_residual = allocator.allocate_tensor(operand_type, s_b_layout, byte_alignment=1024)
-    s_total = allocator.allocate_tensor(cutlass.Float32, s_total_layout, byte_alignment=1024)
-    s_a = s_a_all[warp, None, None]
+    s_k = s_k_all[warp, None, None]
+    s_q = s_q_all[warp, None, None]
+    s_y = s_y_all[warp, None, None]
     s_state = s_state_all[warp, None, None]
     s_partial = s_partial_all[warp, None, None]
     s_state_as_b = cute.make_tensor(
         s_state.iterator,
         cute.make_layout((_BOUNDARY_MMA_VALUE_TILE, 16), stride=(1, 8)),
     )
+    s_q_as_a = cute.make_tensor(
+        s_q.iterator,
+        cute.make_layout((16, _CHUNK_SIZE), stride=(1, 16)),
+    )
+    s_y_as_a = cute.make_tensor(
+        s_y.iterator,
+        cute.make_layout((16, _CHUNK_SIZE), stride=(1, 16)),
+    )
 
     thr_mma = tiled_mma.get_slice(lane)
-    t_cs_a = thr_mma.partition_A(s_a)
+    t_cs_k = thr_mma.partition_A(s_k)
+    t_cs_q = thr_mma.partition_A(s_q_as_a)
+    t_cs_y = thr_mma.partition_A(s_y_as_a)
     t_cs_state = thr_mma.partition_C(s_state)
     t_cs_partial = thr_mma.partition_C(s_partial)
-    t_cs_total = thr_mma.partition_C(s_total)
-    t_cr_a = thr_mma.make_fragment_A(t_cs_a)
+    t_cr_k = thr_mma.make_fragment_A(t_cs_k)
+    t_cr_q = thr_mma.make_fragment_A(t_cs_q)
+    t_cr_y = thr_mma.make_fragment_A(t_cs_y)
     t_cr_b = thr_mma.make_fragment_B(thr_mma.partition_B(s_state_as_b))
     t_cr_partial = thr_mma.make_fragment_C(t_cs_partial)
-    t_cr_total = thr_mma.make_fragment_C(t_cs_total)
 
     copy_atom_a = cute.make_copy_atom(cute.nvgpu.warp.LdMatrix8x8x16bOp(False, 4), operand_type)
+    copy_atom_a_transpose = cute.make_copy_atom(
+        cute.nvgpu.warp.LdMatrix8x8x16bOp(True, 4), operand_type
+    )
     copy_atom_b_state = cute.make_copy_atom(
         cute.nvgpu.warp.LdMatrix8x8x16bOp(True, 4), operand_type
     )
     copy_atom_b_dense = copy_atom_a
     tiled_copy_a = cute.make_tiled_copy_A(copy_atom_a, tiled_mma)
+    tiled_copy_a_transpose = cute.make_tiled_copy_A(copy_atom_a_transpose, tiled_mma)
     tiled_copy_b_state = cute.make_tiled_copy_B(copy_atom_b_state, tiled_mma)
     tiled_copy_b_dense = cute.make_tiled_copy_B(copy_atom_b_dense, tiled_mma)
     thr_copy_a = tiled_copy_a.get_slice(lane)
+    thr_copy_a_transpose = tiled_copy_a_transpose.get_slice(lane)
     thr_copy_b_state = tiled_copy_b_state.get_slice(lane)
     thr_copy_b_dense = tiled_copy_b_dense.get_slice(lane)
-    t_ss_a = thr_copy_a.partition_S(s_a)
-    t_sr_a = thr_copy_a.retile(t_cr_a)
+    t_ss_k = thr_copy_a.partition_S(s_k)
+    t_ss_q = thr_copy_a_transpose.partition_S(s_q_as_a)
+    t_ss_y = thr_copy_a_transpose.partition_S(s_y_as_a)
+    t_sr_k = thr_copy_a.retile(t_cr_k)
+    t_sr_q = thr_copy_a_transpose.retile(t_cr_q)
+    t_sr_y = thr_copy_a_transpose.retile(t_cr_y)
     t_ss_state = thr_copy_b_state.partition_S(s_state_as_b)
     t_sr_b_state = thr_copy_b_state.retile(t_cr_b)
     t_ss_do = thr_copy_b_dense.partition_S(s_do)
     t_ss_residual = thr_copy_b_dense.partition_S(s_residual)
     t_sr_b_dense = thr_copy_b_dense.retile(t_cr_b)
+
+    copy_atom_g2s = cute.make_copy_atom(
+        cute.nvgpu.cpasync.CopyG2SOp(), operand_type, num_bits_per_copy=128
+    )
+    tiled_copy_g2s = cute.make_tiled_copy_tv(
+        copy_atom_g2s,
+        cute.make_layout((16, 2), stride=(2, 1)),
+        cute.make_layout((1, 8), stride=(8, 1)),
+    )
+    thr_copy_g2s = tiled_copy_g2s.get_slice(lane)
+    t_ds_k = thr_copy_g2s.partition_D(s_k)
+    t_ds_q = thr_copy_g2s.partition_D(s_q)
+    t_ds_y = thr_copy_g2s.partition_D(s_y)
 
     g_final = cute.local_tile(
         d_final_state[batch, head, None, None],
@@ -686,16 +816,41 @@ def _wy_boundary_dstate_mma_kernel(
         (16, _BOUNDARY_MMA_VALUE_TILE),
         (warp, value_tile),
     )
-    cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_boundary))
+    t_cg_boundary = thr_mma.partition_C(g_boundary)
+    if cutlass.const_expr(boundaries.element_type == cutlass.Float32):
+        cute.autovec_copy(t_cr_state, t_cg_boundary)
+    else:
+        t_cr_boundary = cute.make_fragment_like(t_cr_state, boundaries.element_type)
+        t_cr_boundary[None] = t_cr_state.load().to(boundaries.element_type)
+        cute.autovec_copy(t_cr_boundary, t_cg_boundary)
     state_identity = cute.make_identity_tensor((16, _BOUNDARY_MMA_VALUE_TILE))
     t_cp_state = thr_mma.partition_C(state_identity)
+
+    if cutlass.const_expr(y.element_type == operand_type):
+        first_chunk = n_chunks - 1
+        g_k_first = cute.local_tile(
+            k_tail[batch, None, head, None], (_CHUNK_SIZE, 16), (first_chunk, warp)
+        )
+        g_q_first = cute.local_tile(
+            q_gamma[batch, None, head, None], (_CHUNK_SIZE, 16), (first_chunk, warp)
+        )
+        g_y_first = cute.local_tile(
+            y[batch, None, head, None], (_CHUNK_SIZE, 16), (first_chunk, warp)
+        )
+        cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_k_first), t_ds_k)
+        cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_q_first), t_ds_q)
+        cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_y_first), t_ds_y)
+        cute.arch.cp_async_commit_group()
 
     for reverse_chunk in cutlass.range(n_chunks, unroll=1):
         chunk = n_chunks - 1 - reverse_chunk
         start = chunk * _CHUNK_SIZE
 
-        # K_tail @ dS: every warp contributes one K=16 slice, then the CTA
-        # deterministically reduces the eight FP32 fragments.
+        if cutlass.const_expr(y.element_type == operand_type):
+            cute.arch.cp_async_wait_group(0)
+            cute.arch.sync_warp()
+
+        # Convert the persistent FP32 state to the low-precision MMA operand.
         t_cr_state_operand = cute.make_fragment_like(t_cr_state, operand_type)
         t_cr_state_operand[None] = t_cr_state.load().to(operand_type)
         cute.autovec_copy(t_cr_state_operand, t_cs_state)
@@ -705,22 +860,89 @@ def _wy_boundary_dstate_mma_kernel(
             t_ss_state[None, None, 0],
             t_sr_b_state[None, None, 0],
         )
-        for linear in cutlass.range(lane, _CHUNK_SIZE * 16, 32):
-            row = linear // 16
-            key_local = linear - row * 16
-            s_a[row, key_local] = k_tail[batch, start + row, head, key_start + key_local].to(
-                operand_type
+
+        if cutlass.const_expr(y.element_type == operand_type):
+            # All three current tiles reach registers before their shared
+            # buffers are reused for the next reverse chunk.
+            cute.copy(tiled_copy_a, t_ss_k[None, None, 0], t_sr_k[None, None, 0])
+            cute.copy(
+                tiled_copy_a_transpose,
+                t_ss_q[None, None, 0],
+                t_sr_q[None, None, 0],
             )
-        cute.arch.sync_warp()
-        cute.copy(tiled_copy_a, t_ss_a[None, None, 0], t_sr_a[None, None, 0])
+            cute.copy(
+                tiled_copy_a_transpose,
+                t_ss_y[None, None, 0],
+                t_sr_y[None, None, 0],
+            )
+
+            if reverse_chunk + 1 < n_chunks:
+                next_chunk = chunk - 1
+                g_k_next = cute.local_tile(
+                    k_tail[batch, None, head, None], (_CHUNK_SIZE, 16), (next_chunk, warp)
+                )
+                g_q_next = cute.local_tile(
+                    q_gamma[batch, None, head, None],
+                    (_CHUNK_SIZE, 16),
+                    (next_chunk, warp),
+                )
+                g_y_next = cute.local_tile(
+                    y[batch, None, head, None], (_CHUNK_SIZE, 16), (next_chunk, warp)
+                )
+                cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_k_next), t_ds_k)
+                cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_q_next), t_ds_q)
+                cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_y_next), t_ds_y)
+                cute.arch.cp_async_commit_group()
+        else:
+            # FP32 public auxiliaries require an explicit type conversion.
+            for linear in cutlass.range(lane, _CHUNK_SIZE * 16, 32):
+                row = linear // 16
+                key_local = linear - row * 16
+                s_k[row, key_local] = k_tail[batch, start + row, head, key_start + key_local].to(
+                    operand_type
+                )
+                s_q[row, key_local] = q_gamma[batch, start + row, head, key_start + key_local].to(
+                    operand_type
+                )
+                s_y[row, key_local] = y[batch, start + row, head, key_start + key_local].to(
+                    operand_type
+                )
+            cute.arch.sync_warp()
+            cute.copy(tiled_copy_a, t_ss_k[None, None, 0], t_sr_k[None, None, 0])
+            cute.copy(
+                tiled_copy_a_transpose,
+                t_ss_q[None, None, 0],
+                t_sr_q[None, None, 0],
+            )
+            cute.copy(
+                tiled_copy_a_transpose,
+                t_ss_y[None, None, 0],
+                t_sr_y[None, None, 0],
+            )
+
+        # Every C-fragment lane reuses one of the same 16 decay values.
+        # Fetch one coalesced copy per half warp before the K-tail MMA, then
+        # broadcast from lanes 0..15 while that MMA result is still in flight.
+        lane_decay = decay_end[
+            batch,
+            chunk,
+            head,
+            key_start + (lane & 15),
+        ].to(cutlass.Float32)
+
+        # K_tail @ dS: every warp contributes one K=16 slice, then the CTA
+        # deterministically reduces the eight FP32 fragments.
         t_cr_partial.fill(0.0)
         cute.gemm(
             tiled_mma,
             t_cr_partial,
-            t_cr_a[None, None, 0],
+            t_cr_k[None, None, 0],
             t_cr_b[None, None, 0],
             t_cr_partial,
         )
+        for state_element in cutlass.range_constexpr(cute.size(t_cr_state.shape)):
+            key_local = t_cp_state[state_element][0]
+            t_cr_state[state_element] *= cute.arch.shuffle_sync(lane_decay, key_local)
         cute.autovec_copy(t_cr_partial, t_cs_partial)
         cute.arch.sync_threads()
 
@@ -731,59 +953,17 @@ def _wy_boundary_dstate_mma_kernel(
             total = cutlass.Float32(0.0)
             for source_warp in cutlass.range_constexpr(_BOUNDARY_MMA_WARPS):
                 total += s_partial_all[source_warp, row, value_local]
-            s_total[row, value_local] = total
+            total += aqk_do[batch, start + row, head, value_idx]
+            # Negating the B operand lets the already-staged +Y tile perform
+            # the subtraction without another shared-memory rewrite.
+            s_residual[value_local, row] = (-total).to(operand_type)
             s_do[value_local, row] = do[batch, start + row, head, value_idx].to(operand_type)
-        cute.arch.sync_threads()
-
-        # Warp zero adds A_qk^T @ dO to the reduced residual gradient.
-        if warp == 0:
-            for linear in cutlass.range(lane, _CHUNK_SIZE * _CHUNK_SIZE, 32):
-                row = linear // _CHUNK_SIZE
-                output_row = linear - row * _CHUNK_SIZE
-                s_a[row, output_row] = aqk[batch, chunk, head, output_row, row].to(operand_type)
-            cute.arch.sync_warp()
-            cute.autovec_copy(t_cs_total, t_cr_total)
-            cute.copy(tiled_copy_a, t_ss_a[None, None, 0], t_sr_a[None, None, 0])
-            cute.copy(
-                tiled_copy_b_dense,
-                t_ss_do[None, None, 0],
-                t_sr_b_dense[None, None, 0],
-            )
-            cute.gemm(
-                tiled_mma,
-                t_cr_total,
-                t_cr_a[None, None, 0],
-                t_cr_b[None, None, 0],
-                t_cr_total,
-            )
-            cute.autovec_copy(t_cr_total, t_cs_total)
-        cute.arch.sync_threads()
-
-        if tidx < _CHUNK_SIZE * _BOUNDARY_MMA_VALUE_TILE:
-            row = tidx // _BOUNDARY_MMA_VALUE_TILE
-            value_local = tidx - row * _BOUNDARY_MMA_VALUE_TILE
-            s_residual[value_local, row] = s_total[row, value_local].to(operand_type)
             if cutlass.const_expr(store_d_residual):
-                value_idx = value_tile * _BOUNDARY_MMA_VALUE_TILE + value_local
-                d_residual[batch, start + row, head, value_idx] = s_total[row, value_local]
+                d_residual[batch, start + row, head, value_idx] = total.to(d_residual.element_type)
         cute.arch.sync_threads()
 
-        # D*dS + Q_gamma^T*dO - Y^T*residual.  Each warp owns exactly the
-        # 16 K rows updated by its two tensor-core operations.
-        for state_element in cutlass.range_constexpr(cute.size(t_cr_state.shape)):
-            key_local = t_cp_state[state_element][0]
-            t_cr_state[state_element] *= decay_end[batch, chunk, head, key_start + key_local].to(
-                cutlass.Float32
-            )
-
-        for linear in cutlass.range(lane, 16 * _CHUNK_SIZE, 32):
-            key_local = linear // _CHUNK_SIZE
-            row = linear - key_local * _CHUNK_SIZE
-            s_a[key_local, row] = q_gamma[batch, start + row, head, key_start + key_local].to(
-                operand_type
-            )
-        cute.arch.sync_warp()
-        cute.copy(tiled_copy_a, t_ss_a[None, None, 0], t_sr_a[None, None, 0])
+        # Q_gamma^T*dO - Y^T*residual completes the update after the decay
+        # multiply above.  Each warp owns exactly 16 K rows.
         cute.copy(
             tiled_copy_b_dense,
             t_ss_do[None, None, 0],
@@ -792,20 +972,11 @@ def _wy_boundary_dstate_mma_kernel(
         cute.gemm(
             tiled_mma,
             t_cr_state,
-            t_cr_a[None, None, 0],
+            t_cr_q[None, None, 0],
             t_cr_b[None, None, 0],
             t_cr_state,
         )
 
-        cute.arch.sync_warp()
-        for linear in cutlass.range(lane, 16 * _CHUNK_SIZE, 32):
-            key_local = linear // _CHUNK_SIZE
-            row = linear - key_local * _CHUNK_SIZE
-            s_a[key_local, row] = -y[batch, start + row, head, key_start + key_local].to(
-                operand_type
-            )
-        cute.arch.sync_warp()
-        cute.copy(tiled_copy_a, t_ss_a[None, None, 0], t_sr_a[None, None, 0])
         cute.copy(
             tiled_copy_b_dense,
             t_ss_residual[None, None, 0],
@@ -814,7 +985,7 @@ def _wy_boundary_dstate_mma_kernel(
         cute.gemm(
             tiled_mma,
             t_cr_state,
-            t_cr_a[None, None, 0],
+            t_cr_y[None, None, 0],
             t_cr_b[None, None, 0],
             t_cr_state,
         )
@@ -823,7 +994,21 @@ def _wy_boundary_dstate_mma_kernel(
             (16, _BOUNDARY_MMA_VALUE_TILE),
             (warp, value_tile),
         )
-        cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_boundary))
+        t_cg_boundary = thr_mma.partition_C(g_boundary)
+        if cutlass.const_expr(boundaries.element_type == cutlass.Float32):
+            cute.autovec_copy(t_cr_state, t_cg_boundary)
+        else:
+            t_cr_boundary = cute.make_fragment_like(t_cr_state, boundaries.element_type)
+            t_cr_boundary[None] = t_cr_state.load().to(boundaries.element_type)
+            cute.autovec_copy(t_cr_boundary, t_cg_boundary)
+
+    if cutlass.const_expr(store_d_initial_state):
+        g_initial = cute.local_tile(
+            d_initial_state[batch, head, None, None],
+            (16, _BOUNDARY_MMA_VALUE_TILE),
+            (warp, value_tile),
+        )
+        cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_initial))
 
 
 @cute.kernel
@@ -1241,12 +1426,20 @@ def _launch_wy_boundary_dstate_mma(
     d_final_state: cute.Tensor,
     boundaries: cute.Tensor,
     d_residual: cute.Tensor,
+    aqk_do: cute.Tensor,
+    d_initial_state: cute.Tensor,
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
+    store_d_initial_state: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
+    precompute_a_layout = cute.make_layout((_CHUNK_SIZE, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
+    precompute_b_layout = cute.make_layout(
+        (_AQK_PRECOMPUTE_WARPS, _BOUNDARY_MMA_VALUE_TILE, _CHUNK_SIZE),
+        stride=(_BOUNDARY_MMA_VALUE_TILE * _CHUNK_SIZE, _CHUNK_SIZE, 1),
+    )
     s_a_layout = cute.make_layout(
         (_BOUNDARY_MMA_WARPS, _CHUNK_SIZE, 16),
         stride=(_CHUNK_SIZE * 16, 16, 1),
@@ -1256,16 +1449,79 @@ def _launch_wy_boundary_dstate_mma(
         stride=(16 * _BOUNDARY_MMA_VALUE_TILE, _BOUNDARY_MMA_VALUE_TILE, 1),
     )
     s_b_layout = cute.make_layout((_BOUNDARY_MMA_VALUE_TILE, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
-    s_total_layout = cute.make_layout(
-        (_CHUNK_SIZE, _BOUNDARY_MMA_VALUE_TILE),
-        stride=(_BOUNDARY_MMA_VALUE_TILE, 1),
-    )
     tiled_mma = cute.make_tiled_mma(
         cute.nvgpu.warp.MmaF16BF16Op(do.element_type, cutlass.Float32, (16, 8, 16)),
         (1, 1, 1),
         permutation_mnk=(16, _BOUNDARY_MMA_VALUE_TILE, 16),
     )
+    _precompute_aqk_do_kernel(
+        aqk,
+        do,
+        aqk_do,
+        n_chunks,
+        heads,
+        tiled_mma,
+        precompute_a_layout,
+        precompute_b_layout,
+    ).launch(
+        grid=(
+            y.shape[0] * n_chunks * heads * (_DIM // _AQK_PRECOMPUTE_VALUES),
+            1,
+            1,
+        ),
+        block=(_AQK_PRECOMPUTE_THREADS, 1, 1),
+        stream=stream,
+    )
     _wy_boundary_dstate_mma_kernel(
+        y,
+        q_gamma,
+        k_tail,
+        decay_end,
+        aqk_do,
+        do,
+        d_final_state,
+        boundaries,
+        d_residual,
+        d_initial_state,
+        time,
+        n_chunks,
+        heads,
+        store_d_residual,
+        store_d_initial_state,
+        tiled_mma,
+        s_a_layout,
+        s_state_layout,
+        s_state_layout,
+        s_b_layout,
+    ).launch(
+        grid=(y.shape[0] * heads * (_DIM // _BOUNDARY_MMA_VALUE_TILE), 1, 1),
+        block=(_BOUNDARY_MMA_THREADS, 1, 1),
+        stream=stream,
+    )
+
+
+@cute.jit
+def _launch_wy_boundary_dstate_mma_compact(
+    y: cute.Tensor,
+    q_gamma: cute.Tensor,
+    k_tail: cute.Tensor,
+    decay_end: cute.Tensor,
+    aqk: cute.Tensor,
+    do: cute.Tensor,
+    d_final_state: cute.Tensor,
+    boundaries: cute.Tensor,
+    d_residual: cute.Tensor,
+    aqk_do: cute.Tensor,
+    d_initial_state: cute.Tensor,
+    time: cutlass.Constexpr,
+    n_chunks: cutlass.Constexpr,
+    heads: cutlass.Constexpr,
+    store_d_residual: cutlass.Constexpr,
+    stream: cuda.CUstream,
+):
+    """Distinct trace entry for low-precision boundary checkpoint storage."""
+
+    _launch_wy_boundary_dstate_mma(
         y,
         q_gamma,
         k_tail,
@@ -1275,20 +1531,14 @@ def _launch_wy_boundary_dstate_mma(
         d_final_state,
         boundaries,
         d_residual,
+        aqk_do,
+        d_initial_state,
         time,
         n_chunks,
         heads,
         store_d_residual,
-        tiled_mma,
-        s_a_layout,
-        s_state_layout,
-        s_state_layout,
-        s_b_layout,
-        s_total_layout,
-    ).launch(
-        grid=(y.shape[0] * heads * (_DIM // _BOUNDARY_MMA_VALUE_TILE), 1, 1),
-        block=(_BOUNDARY_MMA_THREADS, 1, 1),
-        stream=stream,
+        True,
+        stream,
     )
 
 
@@ -1494,6 +1744,55 @@ def _compile_wy_boundary_dstate_mma(
         _fake_tensor(f32, state_shape),
         _fake_tensor(f32, boundary_shape),
         _fake_tensor(f32, residual_shape if store_d_residual else boundary_shape),
+        _fake_tensor(f32, residual_shape),
+        _fake_tensor(f32, state_shape),
+        time,
+        n_chunks,
+        heads,
+        store_d_residual,
+        False,
+        make_fake_stream(),
+        options="--enable-tvm-ffi",
+    )
+
+
+@lru_cache(maxsize=32)
+def _compile_wy_boundary_dstate_mma_compact(
+    device_index: int,
+    batch: int,
+    time: int,
+    heads: int,
+    input_dtype,
+    aux_dtype,
+    store_d_residual: bool,
+):
+    from cutlass.cute.runtime import make_fake_stream
+
+    del device_index
+    n_chunks = math.ceil(time / _CHUNK_SIZE)
+    sequence_shape = (batch, time, heads, _DIM)
+    state_shape = (batch, heads, _DIM, _DIM)
+    decay_shape = (batch, n_chunks, heads, _DIM)
+    aqk_shape = (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE)
+    boundary_shape = (batch, n_chunks + 1, heads, _DIM, _DIM)
+    residual_shape = (batch, time, heads, _DIM)
+    f32 = cutlass.Float32
+    return cute.compile(
+        _launch_wy_boundary_dstate_mma_compact,
+        _fake_tensor(aux_dtype, sequence_shape),
+        _fake_tensor(aux_dtype, sequence_shape),
+        _fake_tensor(aux_dtype, sequence_shape),
+        _fake_tensor(f32, decay_shape),
+        _fake_tensor(aux_dtype, aqk_shape),
+        _fake_tensor(input_dtype, sequence_shape),
+        _fake_tensor(f32, state_shape),
+        _fake_tensor(input_dtype, boundary_shape),
+        _fake_tensor(
+            input_dtype if store_d_residual else f32,
+            residual_shape if store_d_residual else state_shape,
+        ),
+        _fake_tensor(f32, residual_shape),
+        _fake_tensor(f32, state_shape),
         time,
         n_chunks,
         heads,
@@ -1599,14 +1898,24 @@ def wy_boundary_dstate(
     d_final_state: torch.Tensor,
     *,
     return_d_residual: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    compact_boundaries: bool = False,
+) -> (
+    torch.Tensor
+    | tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+):
     """Run the SM120 compact-WY boundary-gradient scan.
 
     ``aux`` may be either :class:`WYBoundaryAux` or ``ChunkForwardAux``.
-    The boundary tensor is FP32 with shape ``[B, C + 1, H, 128, 128]``.
-    When ``return_d_residual=True``, the result is
-    ``(boundaries, d_residual)``; ``d_residual`` contains the already-computed
-    FP32 ``K_tail @ dS1 + A_qk.T @ dO`` values as ``[B, T, H, 128]``.
+    By default the boundary tensor is FP32 with shape
+    ``[B, C + 1, H, 128, 128]``.  ``compact_boundaries=True`` is available for
+    the full-chunk MMA path: it stores boundaries in ``do.dtype`` and appends
+    the exact FP32 initial-state gradient to the return value.  With both
+    options enabled the result is ``(boundaries, d_residual, d_initial)``;
+    ``d_residual`` contains the already-computed
+    ``K_tail @ dS1 + A_qk.T @ dO`` values as ``[B, T, H, 128]``.
+    It remains FP32 for the standard path and uses BF16 together with compact
+    BF16 boundaries, matching its downstream tensor-core operand contract.
     """
 
     tensors = (aux.y, aux.q_gamma, aux.k_tail, aux.decay_end, aux.aqk, do, d_final_state)
@@ -1649,45 +1958,96 @@ def wy_boundary_dstate(
         raise RuntimeError("CUTE_DSL_ARCH must be sm_120 for wy_boundary_dstate")
     if not isinstance(return_d_residual, bool):
         raise TypeError("return_d_residual must be bool")
+    if not isinstance(compact_boundaries, bool):
+        raise TypeError("compact_boundaries must be bool")
+
+    use_mma = time >= 128 and time % _CHUNK_SIZE == 0
+    if compact_boundaries and not use_mma:
+        raise ValueError("compact boundaries require the full-chunk MMA path")
+    if compact_boundaries and do.dtype != torch.bfloat16:
+        raise ValueError("compact boundaries are supported only for BF16")
 
     boundaries = torch.empty(
-        (batch, n_chunks + 1, heads, _DIM, _DIM), device=do.device, dtype=torch.float32
+        (batch, n_chunks + 1, heads, _DIM, _DIM),
+        device=do.device,
+        dtype=do.dtype if compact_boundaries else torch.float32,
     )
     d_residual = None
     if return_d_residual:
-        d_residual = torch.empty(sequence_shape, device=do.device, dtype=torch.float32)
+        d_residual = torch.empty(
+            sequence_shape,
+            device=do.device,
+            dtype=do.dtype if compact_boundaries else torch.float32,
+        )
     residual_arg = d_residual if d_residual is not None else boundaries
+    if compact_boundaries and d_residual is None:
+        residual_arg = d_final_state
     input_dtype = cutlass.BFloat16 if do.dtype == torch.bfloat16 else cutlass.Float16
     aux_dtype = {
         torch.float16: cutlass.Float16,
         torch.bfloat16: cutlass.BFloat16,
         torch.float32: cutlass.Float32,
     }[aux.y.dtype]
+    d_initial_state = None
+    if compact_boundaries:
+        d_initial_state = torch.empty(state_shape, device=do.device, dtype=torch.float32)
     device_index = do.device.index
     if device_index is None:
         raise RuntimeError("do must have a concrete CUDA device index")
     with torch.cuda.device(do.device):
-        compile_boundary = (
-            _compile_wy_boundary_dstate_mma
-            if time >= 128 and time % _CHUNK_SIZE == 0
-            else _compile_wy_boundary_dstate
-        )
-        compiled = compile_boundary(
-            device_index,
-            batch,
-            time,
-            heads,
-            input_dtype,
-            aux_dtype,
-            return_d_residual,
-        )
+        if use_mma:
+            compile_boundary = (
+                _compile_wy_boundary_dstate_mma_compact
+                if compact_boundaries
+                else _compile_wy_boundary_dstate_mma
+            )
+            compiled = compile_boundary(
+                device_index,
+                batch,
+                time,
+                heads,
+                input_dtype,
+                aux_dtype,
+                return_d_residual,
+            )
+        else:
+            compiled = _compile_wy_boundary_dstate(
+                device_index,
+                batch,
+                time,
+                heads,
+                input_dtype,
+                aux_dtype,
+                return_d_residual,
+            )
         stream = cuda.CUstream(torch.cuda.current_stream(do.device).cuda_stream)
-        compiled(
-            *tensors,
-            boundaries,
-            residual_arg,
-            stream,
-        )
+        if use_mma:
+            # The FP32 precompute scratch may alias the returned residual only
+            # when that residual is also FP32.  The compact path rounds dR to
+            # BF16 for its downstream MMA/solve consumers, while the ordered
+            # boundary recurrence still consumes the unrounded FP32 product.
+            aqk_do = d_residual if not compact_boundaries else None
+            if aqk_do is None:
+                aqk_do = torch.empty(sequence_shape, device=do.device, dtype=torch.float32)
+            compiled(
+                *tensors,
+                boundaries,
+                residual_arg,
+                aqk_do,
+                d_initial_state if d_initial_state is not None else d_final_state,
+                stream,
+            )
+        else:
+            compiled(
+                *tensors,
+                boundaries,
+                residual_arg,
+                stream,
+            )
+    if d_initial_state is not None:
+        if d_residual is None:
+            return boundaries, d_initial_state
+        return boundaries, d_residual, d_initial_state
     if d_residual is None:
         return boundaries
     return boundaries, d_residual

@@ -52,37 +52,45 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 4096 | 16 | 20 / 100 | 446.1 | 476.4 | **1.07x** | 1.38e-3 |
 | chunk forward | 1 | 8192 | 16 | 20 / 100 | 978.0 | 1036.4 | **1.06x** | 1.41e-3 |
 | chunk forward | 1 | 16384 | 16 | 10 / 50 | 1889.5 | 2111.5 | **1.12x** | 1.50e-3 |
-| chunk backward | 1 | 16 | 16 | 50 / 200 | 111.9 | 274.3 | **2.45x** | 3.91e-3 |
-| chunk backward | 1 | 64 | 16 | 100 / 300 | 152.8 | 279.4 | **1.83x** | 2.44e-3 |
-| chunk backward | 1 | 128 | 16 | 50 / 200 | 163.3 | 278.2 | **1.70x** | 2.20e-3 |
-| chunk backward | 1 | 256 | 16 | 50 / 200 | 207.0 | 276.7 | **1.34x** | 3.91e-3 |
-| chunk backward | 1 | 512 | 16 | 100 / 300 | 368.8 | 277.7 | 0.75x | 2.93e-3 |
+| chunk backward | 1 | 16 | 16 | 40 / 300 | 112.1 | 274.6 | **2.45x** | 3.91e-3 |
+| chunk backward | 1 | 64 | 16 | 40 / 300 | 172.9 | 396.8 | **2.29x** | 2.44e-3 |
+| chunk backward | 1 | 128 | 16 | 40 / 300 | 126.4 | 279.3 | **2.21x** | 2.08e-3 |
+| chunk backward | 1 | 256 | 16 | 40 / 300 | 134.6 | 278.7 | **2.07x** | 2.44e-3 |
+| chunk backward | 1 | 512 | 16 | 40 / 300 | 148.8 | 284.0 | **1.91x** | 2.93e-3 |
+| chunk backward | 1 | 1024 | 16 | 40 / 300 | 299.1 | 391.1 | **1.31x** | 2.93e-3 |
+| chunk backward | 1 | 2048 | 16 | 40 / 300 | 623.7 | 708.6 | **1.14x** | 3.91e-3 |
+| chunk backward | 1 | 4096 | 16 | 20 / 100 | 1318.8 | 1465.4 | **1.11x** | 3.91e-3 |
+| chunk backward | 1 | 8192 | 16 | 20 / 100 | 2838.6 | 3126.1 | **1.10x** | 2.93e-3 |
+| chunk backward | 1 | 16384 | 16 | 10 / 50 | 5810.6 | 6353.5 | **1.09x** | 1.95e-3 |
 | token forward | 1 | 1 | 32 | 50 / 200 | 21.0 | 25.8 | **1.23x** | 2.98e-8 |
 | token forward | 1 | 16 | 16 | 50 / 200 | 35.3 | 35.2 | 1.00x | 1.91e-6 |
 
-Forward stays ahead at every measured point through T=16384. Backward-only
-stays ahead through T=256. The backward crossover moved from between T=64 and
-T=128 to between T=256 and T=512, while the checkpointed path also removed the
-old T=128 correctness cap.
+Forward and backward both stay ahead at every measured point through T=16384.
+The compact-WY dispatch at T=128 reduces CuTe backward latency from 172.9 us at
+T=64 to 126.4 us despite doubling the sequence length. Its advantage narrows
+from 2.45x at T=16 to 1.09x at T=16384 without a measured crossover, while the
+checkpointed path also removes the old T=128 correctness cap.
 
-The long backward saves FP32 state boundaries and compact-WY auxiliaries in
-forward. To account for that work, the complete graph-build plus backward call
-was also measured with 30 warmups and 100 samples:
+For full-chunk BF16 training at T>=128, forward checkpoints Y, Q-gamma,
+K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32.
+The boundary stage precomputes all independent `A_qk.T @ dO` products before
+its reverse scan, stages Y/Q-gamma/K-tail with 128-bit `cp.async`, and shares
+each decay value through warp shuffles. It writes BF16 `dR` and `dS`
+checkpoints for the tensor-core consumers while returning the exact FP32
+`dS0` separately. T=64--127, partial tails, and FP16 retain FP32 boundaries.
 
-| B | T | H | CuTe forward+backward | Official forward+backward | Speedup |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 128 | 16 | 206.4 | 516.3 | **2.50x** |
-| 1 | 256 | 16 | 263.6 | 541.2 | **2.05x** |
-| 1 | 512 | 16 | 430.8 | 537.2 | **1.25x** |
+The local compact-WY VJP keeps gamma in FP32 but stores its persistent E and
+K-bar MMA operands in the input dtype. Dual large-state and square products,
+paired K16 updates, and producer epilogues reduce the full-chunk schedule to
+12 ordered launches; at T>=2048 the full-chunk BF16 specialization folds the
+state/gradient decay dot into an existing state-product kernel and uses 11.
 
-Peak allocated-memory deltas for those complete calls were 35.6/69.1/132.3
-MiB for CuTe at T=128/256/512, versus 19.0/36.0/70.0 MiB for the official
-path. The speedup therefore comes with roughly 1.9x peak allocation in this
-sweep.
-
-These complete-call and peak-memory figures are supplemental measurements;
-the tracked plot suite below contains the per-kernel rows. Use the
-`chunk-training` command to reproduce the complete-call timing.
+The backward-only timings above reuse an already-built autograd graph, so they
+do not include the checkpoint-producing forward. Use the `chunk-training`
+command to measure a complete call. Compact BF16 `S`/`dS` checkpoints halve
+boundary storage relative to FP32, but retaining both boundary sets plus
+compact-WY workspace still makes the CuTe path use more memory than the
+official implementation.
 
 The exact values behind the per-kernel table and the README figure are tracked in
 [`data/benchmark-results-sm120.json`](data/benchmark-results-sm120.json). The
@@ -131,11 +139,10 @@ between old and new measurements.
 ## Interpretation
 
 The optimization goal is met for all three kernel families and now extends to
-substantially longer chunk sequences. Forward remains faster at all measured
-lengths through T=16384, while backward-only crosses between T=256 and T=512.
-At T=512 the complete forward+backward call still wins because the forward gain
-offsets the slower backward. The 16K point is a forward-only measurement, not a
-complete training-throughput result. Reducing checkpoint/workspace memory,
-additional dimensions, packed sequences, and fused normalization/gates remain
-separate milestones; the measured B1/H16 results must not be extrapolated to
-those workloads.
+substantially longer chunk sequences. Both chunk forward and backward-only are
+faster at every measured length through T=16384; the backward margin gradually
+narrows but remains 1.09x at the longest point. These are primitive-level
+latencies, not complete training-throughput measurements. Reducing
+checkpoint/workspace memory, additional dimensions, packed sequences, and
+fused normalization/gates remain separate milestones; the measured B1/H16
+results must not be extrapolated to those workloads.

@@ -181,6 +181,112 @@ def test_chunk_gdn2_parallel_backward_handles_partial_tail() -> None:
 
 
 @pytest.mark.cuda
+@pytest.mark.slow
+@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
+@pytest.mark.parametrize(
+    ("time", "dtype", "has_initial_state", "include_final_state_gradient"),
+    [
+        (128, torch.bfloat16, True, True),
+        (512, torch.bfloat16, True, False),
+        (128, torch.bfloat16, False, True),
+        (128, torch.float16, True, True),
+    ],
+    ids=["t128-all-seven", "t512-hidden-final", "t128-no-initial", "fp16-fallback"],
+)
+def test_chunk_gdn2_full_chunk_backward_matches_reference(
+    time: int,
+    dtype: torch.dtype,
+    has_initial_state: bool,
+    include_final_state_gradient: bool,
+) -> None:
+    generator = torch.Generator(device="cuda").manual_seed(
+        2_605_000 + time + 17 * has_initial_state + 31 * include_final_state_gradient
+    )
+    shape = (1, time, 1, 128)
+    state_shape = (1, 1, 128, 128)
+    scale = 0.125
+    q = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device="cuda"), dim=-1
+    ).to(dtype)
+    k = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device="cuda"), dim=-1
+    ).to(dtype)
+    base = [
+        q,
+        k,
+        (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype),
+        -torch.rand(shape, generator=generator, device="cuda") * 0.03,
+        torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype),
+        torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype),
+    ]
+    initial_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.03
+        if has_initial_state
+        else None
+    )
+    d_output = (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype)
+    d_final_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.1
+    )
+
+    actual_inputs = [tensor.detach().requires_grad_() for tensor in base]
+    actual_initial = initial_state.detach().requires_grad_() if initial_state is not None else None
+    actual_output, actual_final = chunk_gdn2(
+        *actual_inputs,
+        actual_initial,
+        scale=scale,
+        output_final_state=include_final_state_gradient,
+    )
+    assert (actual_final is not None) == include_final_state_gradient
+    actual_targets = (
+        (*actual_inputs, actual_initial) if actual_initial is not None else tuple(actual_inputs)
+    )
+    if include_final_state_gradient:
+        assert actual_final is not None
+        actual = torch.autograd.grad(
+            (actual_output, actual_final),
+            actual_targets,
+            (d_output, d_final_state),
+        )
+    else:
+        # The custom Function must materialize a zero FP32 final-state VJP.
+        actual = torch.autograd.grad(actual_output, actual_targets, d_output)
+
+    expected_inputs = [tensor.detach().requires_grad_() for tensor in base]
+    expected_initial = (
+        initial_state.detach().requires_grad_() if initial_state is not None else None
+    )
+    expected_output, expected_final = chunkwise_forward_reference(
+        *expected_inputs,
+        expected_initial,
+        scale=scale,
+        chunk_size=16,
+    )
+    assert expected_final is not None
+    expected_targets = (
+        (*expected_inputs, expected_initial)
+        if expected_initial is not None
+        else tuple(expected_inputs)
+    )
+    if include_final_state_gradient:
+        expected = torch.autograd.grad(
+            (expected_output, expected_final),
+            expected_targets,
+            (d_output, d_final_state),
+        )
+    else:
+        expected = torch.autograd.grad(expected_output, expected_targets, d_output)
+
+    for gradient, reference in zip(actual, expected, strict=True):
+        difference = gradient.float() - reference.float()
+        relative_l2 = torch.linalg.vector_norm(difference) / torch.linalg.vector_norm(
+            reference.float()
+        ).clamp_min(1e-12)
+        assert relative_l2.item() < 0.01
+        assert difference.abs().max().item() < 5e-3
+
+
+@pytest.mark.cuda
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 def test_chunk_gdn2_can_hide_final_state() -> None:
     shape = (1, 1, 1, 128)

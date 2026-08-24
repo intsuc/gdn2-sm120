@@ -478,7 +478,13 @@ def _inter_chunk_k_split_mma_kernel(
             (16, value_tile),
             (warp, value_tile_idx),
         )
-        cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_boundary))
+        t_cg_boundary = thr_mma.partition_C(g_boundary)
+        if cutlass.const_expr(state_boundaries.element_type == cutlass.Float32):
+            cute.autovec_copy(t_cr_state, t_cg_boundary)
+        else:
+            t_cr_boundary = cute.make_fragment_like(t_cr_state, state_boundaries.element_type)
+            t_cr_boundary[None] = t_cr_state.load().to(state_boundaries.element_type)
+            cute.autovec_copy(t_cr_boundary, t_cg_boundary)
     state_identity = cute.make_identity_tensor((16, value_tile))
     t_cp_state = thr_mma.partition_C(state_identity)
 
@@ -528,8 +534,9 @@ def _inter_chunk_k_split_mma_kernel(
                 cute.arch.cp_async_commit_group()
                 cute.arch.cp_async_wait_group(0)
             else:
-                # return_aux=True keeps the public WY tensors in FP32. cp.async
-                # cannot perform that FP32-to-low-precision conversion.
+                # Short training specializations keep their public WY tensors
+                # in FP32. cp.async cannot perform the required conversion to
+                # the low-precision tensor-core operand type.
                 for linear in cutlass.range(lane, _CHUNK_SIZE * 16, 32):
                     row = linear // 16
                     key_local = linear - row * 16
@@ -681,7 +688,13 @@ def _inter_chunk_k_split_mma_kernel(
                 (16, value_tile),
                 (warp, value_tile_idx),
             )
-            cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_boundary))
+            t_cg_boundary = thr_mma.partition_C(g_boundary)
+            if cutlass.const_expr(state_boundaries.element_type == cutlass.Float32):
+                cute.autovec_copy(t_cr_state, t_cg_boundary)
+            else:
+                t_cr_boundary = cute.make_fragment_like(t_cr_state, state_boundaries.element_type)
+                t_cr_boundary[None] = t_cr_state.load().to(state_boundaries.element_type)
+                cute.autovec_copy(t_cr_boundary, t_cg_boundary)
 
     if cutlass.const_expr(use_algebra):
         cute.arch.cp_async_wait_group(0)
@@ -831,7 +844,13 @@ def _launch_chunk_forward(
 
 @dataclass(frozen=True)
 class ChunkForwardAux:
-    """WY tensors and exact state boundaries consumed by checkpointed backward."""
+    """WY tensors and state boundaries consumed by checkpointed backward.
+
+    Full chunks at T>=128 checkpoint Y/Q-gamma/K-tail/A-qk in the input dtype
+    and keep U/decay in FP32.  BF16 also uses compact BF16 state checkpoints;
+    FP16, short, and partial-tail specializations keep state boundaries in
+    FP32.
+    """
 
     y: object
     u: object
@@ -863,6 +882,8 @@ def _compile_chunk_forward(
     gate_dtype,
     has_initial_state: bool,
     compact_aux: bool,
+    compact_backward_aux: bool,
+    compact_state_boundaries: bool,
     store_state_boundaries: bool,
     use_algebra: bool,
 ):
@@ -878,7 +899,9 @@ def _compile_chunk_forward(
     decay_shape = (batch, n_chunks, heads, _KEY_DIM)
     aqk_shape = (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE)
     f32 = cutlass.Float32
-    aux_dtype = input_dtype if compact_aux else f32
+    aux_dtype = input_dtype if compact_aux or compact_backward_aux else f32
+    u_dtype = f32 if compact_backward_aux else aux_dtype
+    boundary_dtype = input_dtype if compact_state_boundaries else f32
 
     return cute.compile(
         _launch_chunk_forward,
@@ -890,7 +913,7 @@ def _compile_chunk_forward(
         _fake_tensor(input_dtype, v_shape),  # w
         _fake_tensor(f32, state_shape),  # initial state
         _fake_tensor(aux_dtype, q_shape),  # y
-        _fake_tensor(aux_dtype, v_shape),  # u
+        _fake_tensor(u_dtype, v_shape),  # u
         _fake_tensor(aux_dtype, q_shape),  # q_gamma
         _fake_tensor(aux_dtype, q_shape),  # k_tail
         _fake_tensor(f32, decay_shape),
@@ -898,7 +921,7 @@ def _compile_chunk_forward(
         _fake_tensor(input_dtype, v_shape),  # output
         _fake_tensor(f32, state_shape),  # final state
         _fake_tensor(
-            f32, boundary_shape if store_state_boundaries else state_shape
+            boundary_dtype, boundary_shape if store_state_boundaries else state_shape
         ),  # optional state boundaries
         batch,
         time,
@@ -983,18 +1006,22 @@ def chunk_forward(
         raise ValueError("scale must be finite")
 
     n_chunks = math.ceil(time / _CHUNK_SIZE)
-    compact_aux = not return_aux and n_chunks >= _K_SPLIT_MIN_CHUNKS and time % _CHUNK_SIZE == 0
+    full_chunks = time % _CHUNK_SIZE == 0
+    compact_aux = not return_aux and n_chunks >= _K_SPLIT_MIN_CHUNKS and full_chunks
+    compact_backward_aux = return_aux and time >= 128 and full_chunks
+    compact_state_boundaries = compact_backward_aux and q.dtype == torch.bfloat16
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.
     use_algebra = q.dtype == torch.bfloat16 and compact_aux and n_chunks >= _ALGEBRA_MIN_CHUNKS
-    aux_dtype = q.dtype if compact_aux else torch.float32
+    aux_dtype = q.dtype if compact_aux or compact_backward_aux else torch.float32
+    u_dtype = torch.float32 if compact_backward_aux else aux_dtype
     output = torch.empty_like(v)
     final_state = torch.empty(expected_state_shape, device=q.device, dtype=torch.float32)
-    # The tensor-core path consumes low-precision operands directly.  Keep the
-    # public profiling auxiliaries FP32 when requested, while avoiding twice
-    # the traffic in the normal long-sequence path.
+    # Long training keeps U in FP32 so residual subtraction preserves its
+    # rounding order, while tensors immediately narrowed by backward MMA are
+    # checkpointed in the input dtype to halve persistent traffic.
     y = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
-    u = torch.empty(v.shape, device=q.device, dtype=aux_dtype)
+    u = torch.empty(v.shape, device=q.device, dtype=u_dtype)
     q_gamma = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     k_tail = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     decay_end = torch.empty((batch, n_chunks, heads, key_dim), device=q.device, dtype=torch.float32)
@@ -1008,7 +1035,7 @@ def chunk_forward(
         state_boundaries = torch.empty(
             (batch, n_chunks + 1, heads, key_dim, value_dim),
             device=q.device,
-            dtype=torch.float32,
+            dtype=q.dtype if compact_state_boundaries else torch.float32,
         )
     state_arg = initial_state if initial_state is not None else final_state
     boundary_arg = state_boundaries if state_boundaries is not None else final_state
@@ -1028,6 +1055,8 @@ def chunk_forward(
             cutlass_gate_dtype,
             initial_state is not None,
             compact_aux,
+            compact_backward_aux,
+            compact_state_boundaries,
             return_aux,
             use_algebra,
         )

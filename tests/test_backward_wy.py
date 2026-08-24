@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from gdn2_sm120.backward_parallel import WYBoundaryAux, wy_boundary_dstate
 from gdn2_sm120.backward_wy import (
     compact_wy_chunk_vjp_cute,
     compact_wy_chunk_vjp_reference,
@@ -104,15 +105,16 @@ def _boundary_vjp(
         dtype=d_final_state.dtype,
         device=d_final_state.device,
     )
+    compute_dtype = d_final_state.dtype
     for chunk in reversed(range(n_chunks)):
         start = chunk * chunk_size
         stop = min(start + chunk_size, time)
         length = stop - start
-        y = aux.y[:, start:stop].transpose(1, 2)
-        q_gamma = aux.q_gamma[:, start:stop].transpose(1, 2)
-        k_tail = aux.k_tail[:, start:stop].transpose(1, 2)
-        aqk = aux.aqk[:, chunk, :, :length, :length]
-        do_c = do[:, start:stop].transpose(1, 2).to(k_tail.dtype)
+        y = aux.y[:, start:stop].transpose(1, 2).to(compute_dtype)
+        q_gamma = aux.q_gamma[:, start:stop].transpose(1, 2).to(compute_dtype)
+        k_tail = aux.k_tail[:, start:stop].transpose(1, 2).to(compute_dtype)
+        aqk = aux.aqk[:, chunk, :, :length, :length].to(compute_dtype)
+        do_c = do[:, start:stop].transpose(1, 2).to(compute_dtype)
         d_residual = k_tail @ dstate + aqk.transpose(-1, -2) @ do_c
         residual_sequence[:, start:stop] = d_residual.transpose(1, 2)
         dstate = (
@@ -189,6 +191,11 @@ def _cuda_compact_case(time: int, dtype: torch.dtype, *, heads: int = 1):
         scale=0.125,
         return_aux=True,
     )
+    # Most direct kernel tests exercise the generic FP32-boundary contract.
+    # Production compact BF16 checkpoints are covered through the public
+    # autograd path and a dedicated low-boundary test.
+    if aux.state_boundaries.dtype != torch.float32:
+        aux = replace(aux, state_boundaries=aux.state_boundaries.float())
     dstate_boundaries, d_residual = _boundary_vjp(
         aux,
         do,
@@ -419,6 +426,88 @@ def test_compact_wy_h16_t128_matches_reference() -> None:
 
 
 @pytest.mark.cuda
+@pytest.mark.slow
+@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
+def test_compact_wy_t2048_low_boundaries_match_reference_on_current_stream() -> None:
+    generator = torch.Generator(device="cuda").manual_seed(4_170 + 2048)
+    shape = (1, 2048, 1, 128)
+    state_shape = (1, 1, 128, 128)
+    dtype = torch.bfloat16
+    base = (
+        torch.nn.functional.normalize(
+            torch.randn(shape, generator=generator, device="cuda"), dim=-1
+        ).to(dtype),
+        torch.nn.functional.normalize(
+            torch.randn(shape, generator=generator, device="cuda"), dim=-1
+        ).to(dtype),
+        (torch.randn(shape, generator=generator, device="cuda") * 0.15).to(dtype),
+        -torch.rand(shape, generator=generator, device="cuda") * 0.02,
+        (torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")) * 0.7).to(dtype),
+        torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype),
+    )
+    initial_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.02
+    )
+    do = (torch.randn(shape, generator=generator, device="cuda") * 0.12).to(dtype)
+    d_final_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.05
+    )
+    _, _, aux = chunk_forward(
+        *base,
+        initial_state,
+        scale=0.125,
+        return_aux=True,
+    )
+    assert aux.state_boundaries.dtype == torch.bfloat16
+    boundary_aux = WYBoundaryAux(
+        aux.y,
+        aux.q_gamma,
+        aux.k_tail,
+        aux.decay_end,
+        aux.aqk,
+    )
+
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        dstate_boundaries, d_residual, exact_d_initial = wy_boundary_dstate(
+            boundary_aux,
+            do,
+            d_final_state,
+            return_d_residual=True,
+            compact_boundaries=True,
+        )
+        actual = compact_wy_chunk_vjp_cute(
+            *base,
+            aux.state_boundaries,
+            dstate_boundaries,
+            aux,
+            do,
+            scale=0.125,
+            precomputed_d_residual=d_residual,
+            precomputed_d_initial_state=exact_d_initial,
+        )
+    stream.synchronize()
+
+    assert dstate_boundaries.dtype == torch.bfloat16
+    assert exact_d_initial.dtype == torch.float32
+    expected, _ = compact_wy_chunk_vjp_reference(
+        *base,
+        aux.state_boundaries,
+        dstate_boundaries,
+        aux,
+        do,
+        scale=0.125,
+        verify_boundaries=False,
+    )
+    _assert_long_accuracy_contract(
+        (*actual[:-1], exact_d_initial),
+        (*expected[:-1], exact_d_initial),
+    )
+    torch.testing.assert_close(actual[-1], exact_d_initial, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.cuda
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 def test_compact_wy_partial_tail_uses_current_stream() -> None:
     base, do, aux, dstate_boundaries, d_residual = _cuda_compact_case(19, torch.bfloat16)
@@ -443,8 +532,8 @@ def test_compact_wy_partial_tail_uses_current_stream() -> None:
             scale=0.125,
             precomputed_d_residual=d_residual,
         )
-    # Synchronizing only the caller-selected stream covers all 18 staged
-    # launches in the precomputed-residual specialization, including output.
+    # Synchronizing only the caller-selected stream covers every staged launch
+    # in the precomputed-residual specialization, including output.
     stream.synchronize()
 
     for gradient, reference in zip(actual[:-1], expected[:-1], strict=True):

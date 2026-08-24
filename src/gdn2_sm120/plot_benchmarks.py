@@ -262,7 +262,7 @@ def _plot_chunk_panel(
         linewidth=2.2,
         label="Official Triton",
     )
-    for x, point in zip(xs, points, strict=True):
+    for index, (x, point) in enumerate(zip(xs, points, strict=True)):
         low = min(point.cute_median_us, point.triton_median_us)
         high = max(point.cute_median_us, point.triton_median_us)
         axis.vlines(x, low, high, color="#CBD5E1", linewidth=1.0, zorder=0)
@@ -285,7 +285,12 @@ def _plot_chunk_panel(
             fontsize=8.5,
         )
         label, color = _speedup_label(point.speedup)
-        speedup_y = maximum * (1.32 if log_latency else 1.16)
+        if log_latency:
+            # Ten-point long-sequence sweeps need two label rows; a single row
+            # makes adjacent 1.xx labels read as one continuous string.
+            speedup_y = maximum * (1.29 + 0.21 * (index % 2 if len(points) > 6 else 0))
+        else:
+            speedup_y = maximum * 1.16
         axis.text(
             x,
             speedup_y,
@@ -293,7 +298,7 @@ def _plot_chunk_panel(
             ha="center",
             va="center",
             color=color,
-            fontsize=8 if log_latency else 9,
+            fontsize=7.5 if log_latency else 9,
             fontweight="bold",
         )
 
@@ -303,7 +308,13 @@ def _plot_chunk_panel(
             axis.axvspan(left_x, right_x, color="#F59E0B", alpha=0.08, zorder=-1)
 
     axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
-    axis.set_xticks(xs, [str(point.time) for point in points])
+    axis.set_xticks(
+        xs,
+        [str(point.time) for point in points],
+        rotation=35 if len(points) > 6 else 0,
+        ha="right" if len(points) > 6 else "center",
+        rotation_mode="anchor",
+    )
     axis.set_xlabel("Sequence length T (log₂ spacing)")
     if log_latency:
         minimum = min((*cute, *triton))
@@ -412,8 +423,8 @@ def render_benchmarks(
     figure, axes = plt.subplots(
         1,
         3,
-        figsize=(15.5, 5.7),
-        gridspec_kw={"width_ratios": (1.25, 1.05, 0.85), "wspace": 0.30},
+        figsize=(16.5, 5.9),
+        gridspec_kw={"width_ratios": (1.25, 1.25, 0.80), "wspace": 0.30},
     )
     _plot_chunk_panel(
         axes[0],
@@ -421,7 +432,12 @@ def render_benchmarks(
         MODE_TITLES["chunk-forward"],
         log_latency=True,
     )
-    _plot_chunk_panel(axes[1], by_mode["chunk-backward"], MODE_TITLES["chunk-backward"])
+    _plot_chunk_panel(
+        axes[1],
+        by_mode["chunk-backward"],
+        MODE_TITLES["chunk-backward"],
+        log_latency=True,
+    )
     _plot_token_panel(axes[2], by_mode["token-forward"])
 
     display_device = suite.device.removeprefix("NVIDIA ")
@@ -458,13 +474,12 @@ def render_benchmarks(
         0.04,
         0.02,
         f"Synchronized CUDA events · PyTorch {suite.torch_version} / CUDA {suite.cuda_runtime} · "
-        f"official commit {suite.official_commit[:12]} · shaded spans mark a winner flip "
-        "between measured points",
+        f"official commit {suite.official_commit[:12]}",
         ha="left",
         fontsize=8.5,
         color="#64748B",
     )
-    figure.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.18)
+    figure.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.21)
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=180, facecolor="white", metadata={"Creator": "gdn2-sm120"})
     plt.close(figure)
