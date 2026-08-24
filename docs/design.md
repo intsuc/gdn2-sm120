@@ -29,15 +29,40 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 
 1. one CTA per `(batch, chunk, head)` accumulates log-decay, forms asymmetric
    decay-normalized key/erase/query factors, builds the causal token products,
-   and solves the unit-lower-triangular WY system;
+   and solves the unit-lower-triangular WY system. Each of the 256 K/V solve
+   threads keeps its 16 FP32 values private, eliminating the shared solution
+   buffer and a CTA barrier after every row;
 2. value CTAs walk chunk boundaries in a runtime loop. Eight warps split K into
    16-row fragments, keep a `16 x Vtile` FP32 state per warp in registers, and
    evaluate the dense products with `m16n8k16` warp MMA;
-3. warp-local FP32 results are reduced through shared memory. The long V16
-   schedule double-buffers Y/Q staging to remove two barriers per chunk, while
-   T<512 uses V8 to expose more CTAs.
+3. warp-local FP32 results are reduced through shared memory. Full-chunk paths
+   stage Y/Q with 128-bit `cp.async` copies and cache the 128-element decay
+   vector once per CTA rather than loading it independently from every warp.
+   The algebraic long V16 schedule also interleaves Y/Q partials in one shared
+   allocation; T<512 uses V8 to expose more CTAs.
 
-Normal forward-only calls store compact FP16/BF16 WY auxiliaries. A
+For full-chunk, forward-only BF16 calls at T>=512, the output identity
+
+```text
+R = U - Y S
+O = Q_gamma S + A_qk R
+  = (Q_gamma - A_qk Y) S + A_qk U
+```
+
+moves the two `A_qk` products into the independent chunk-preparation CTAs and
+removes `A_qk @ R` from the sequential state scan. That scan pipelines the next
+Y/Q tile and the current K-tail tile through 128-bit `cp.async`, reusing shared
+state staging after its register load. FP16 retains the original expression to
+avoid overflow in an intermediate that would cancel algebraically; training
+calls retain it because backward consumes the unrearranged compact-WY
+auxiliaries.
+
+The BF16 specialization is validated for normalized Q/K and bounded model
+activations. Values near the BF16 format limit are outside its numerical
+contract because a rearranged intermediate can overflow before a later
+algebraic cancellation.
+
+Forward-only calls use compact FP16/BF16 intermediates that are not exposed. A
 gradient-enabled call that selects the checkpointed backward asks the same
 kernel for FP32 auxiliaries and exact FP32 state boundaries. The chunk size
 differs from the official Triton path's C=64 because BT=16 exposes more CTAs
@@ -137,8 +162,9 @@ not representative of steady-state latency.
 
 Chunk-forward tensor layouts and preparation are shape-specialized, while the
 full-chunk inter-state scan uses a runtime chunk loop. The state dependency is
-still sequential across chunks, but K-split MMA, V16 reuse, and double-buffered
-staging move the measured forward crossover to between T=512 and T=1024.
+still sequential across chunks, but the rearranged long-BF16 pipeline removes
+one product from that critical path and remains faster than the official path
+through the longest measured sequence, T=16384.
 
 ## Primary references
 

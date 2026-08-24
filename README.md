@@ -6,7 +6,8 @@ measured on an NVIDIA RTX PRO 6000 Blackwell Workstation Edition.
 
 The repository contains three working CUDA paths:
 
-- BT=16 compact-WY chunkwise forward with SM120 warp MMA for training/prefill;
+- BT=16 compact-WY chunkwise forward with SM120 warp MMA and a specialized
+  algebraic pipeline for long BF16 prefill;
 - a checkpointed training backward that dispatches between short recurrence,
   chunk-parallel recurrence, and compact-WY warp-MMA VJPs;
 - a register-resident token/recurrent forward for decoding.
@@ -125,8 +126,10 @@ Representative BF16 medians on the target workstation are:
 
 | Path | Shape | CuTe SM120 | Official Triton | Speedup |
 |---|---:|---:|---:|---:|
-| chunk forward | B1 T16 H16 | 36.3 us | 180.4 us | **4.97x** |
-| chunk forward | B1 T512 H16 | 110.9 us | 186.0 us | **1.68x** |
+| chunk forward | B1 T16 H16 | 35.3 us | 181.8 us | **5.15x** |
+| chunk forward | B1 T512 H16 | 65.9 us | 181.6 us | **2.76x** |
+| chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
+| chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
 | chunk backward | B1 T16 H16 | 111.9 us | 274.3 us | **2.45x** |
 | chunk backward | B1 T256 H16 | 207.0 us | 276.7 us | **1.34x** |
 | token forward | B1 T1 H32 | 21.0 us | 25.8 us | **1.23x** |
@@ -152,13 +155,13 @@ This is an alpha, shape-specialized kernel project rather than a drop-in
 replacement for every official option. The primary production shape
 `K=V=128` is implemented and numerically checked in BF16/FP16, including FP32
 log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
-and non-default CUDA streams. In the measured B1/H16 sweep, chunk forward is
-faster through T=512 and reaches near parity at T=1024; backward-only is faster
-through T=256. At T=512, backward-only is slower, while the measured combined
-forward+backward call remains 1.25x faster because the forward path is much
-faster. The checkpointed path trades memory for speed: its T512 measured peak
-allocation delta is about 132 MiB versus 70 MiB for the official path.
-Additional dimensions, packed sequences, and reducing the T512 backward
-workspace/launch count remain optimization work.
+and non-default CUDA streams. In the measured B1/H16 BF16 sweep, chunk forward
+remains faster than the official path at every sampled length through T=16384;
+backward-only is faster through T=256. At T=512, backward-only is slower, while
+the measured combined forward+backward call remains 1.25x faster because the
+forward path is much faster. The checkpointed path trades memory for speed: its
+T512 measured peak allocation delta is about 132 MiB versus 70 MiB for the
+official path. Additional dimensions, packed sequences, and reducing the T512
+backward workspace/launch count remain optimization work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

@@ -61,7 +61,7 @@ def test_chunk_forward_matches_wy_reference(time: int) -> None:
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("time", [7, 16])
+@pytest.mark.parametrize("time", [7, 16, 512])
 def test_chunk_forward_without_initial_state(time: int) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
@@ -70,7 +70,7 @@ def test_chunk_forward_without_initial_state(time: int) -> None:
     expected_output, expected_state = chunkwise_forward_reference(*args[:6], chunk_size=16)
     torch.cuda.synchronize()
     torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
-    state_atol = 8e-4 if time % 16 == 0 else 2e-4
+    state_atol = 1.5e-3 if time >= 512 else 8e-4 if time % 16 == 0 else 2e-4
     state_rtol = 3e-2 if time % 16 == 0 else 2e-3
     torch.testing.assert_close(final_state, expected_state, atol=state_atol, rtol=state_rtol)
 
@@ -139,6 +139,49 @@ def test_chunk_forward_fp16_normalized_qk_batch_two() -> None:
 
 
 @pytest.mark.cuda
+@pytest.mark.parametrize(
+    ("time", "dtype"),
+    [
+        pytest.param(496, torch.bfloat16, id="before-algebra-threshold"),
+        pytest.param(512, torch.bfloat16, id="at-algebra-threshold"),
+        pytest.param(1008, torch.bfloat16, id="long-algebra"),
+        pytest.param(1024, torch.bfloat16, id="long-algebra-power-of-two"),
+        pytest.param(1024, torch.float16, id="long-fp16-original-expression"),
+        pytest.param(1025, torch.bfloat16, id="long-partial-tail"),
+    ],
+)
+def test_chunk_forward_compact_dispatch_boundaries(time: int, dtype: torch.dtype) -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    args = _inputs(time, dtype, heads=1, normalized_qk=True)
+    output, final_state = chunk_forward(*args[:6], args[6], scale=0.125)
+    expected_output, expected_state = chunkwise_forward_reference(
+        *args[:6], args[6], scale=0.125, chunk_size=16
+    )
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
+    state_atol = 1.5e-3 if time % 16 == 0 else 2e-4
+    state_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    torch.testing.assert_close(final_state, expected_state, atol=state_atol, rtol=state_rtol)
+
+
+@pytest.mark.cuda
+def test_chunk_forward_long_algebra_maps_batches_and_heads() -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    args = _inputs(512, batch=2, heads=3, normalized_qk=True)
+    output, final_state = chunk_forward(*args[:6], args[6], scale=0.125)
+    expected_output, expected_state = chunkwise_forward_reference(
+        *args[:6], args[6], scale=0.125, chunk_size=16
+    )
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(final_state, expected_state, atol=1.5e-3, rtol=3e-2)
+
+
+@pytest.mark.cuda
 @pytest.mark.parametrize("time", [16, 19])
 def test_chunk_forward_uses_current_stream(time: int) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
@@ -161,11 +204,14 @@ def test_chunk_forward_uses_current_stream(time: int) -> None:
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_chunk_forward_long_k_split_uses_current_stream(dtype: torch.dtype) -> None:
+@pytest.mark.parametrize(
+    ("time", "dtype"),
+    [(1024, torch.bfloat16), (512, torch.float16)],
+)
+def test_chunk_forward_long_k_split_uses_current_stream(time: int, dtype: torch.dtype) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
-    args = _inputs(512, dtype, heads=1, normalized_qk=True)
+    args = _inputs(time, dtype, heads=1, normalized_qk=True)
     expected_output, expected_state = chunkwise_forward_reference(
         *args[:6], args[6], scale=0.125, chunk_size=16
     )
@@ -181,18 +227,42 @@ def test_chunk_forward_long_k_split_uses_current_stream(dtype: torch.dtype) -> N
 
 
 @pytest.mark.cuda
-@pytest.mark.parametrize("time", [19, 32])
+@pytest.mark.parametrize("time", [19, 32, 1024])
 def test_chunk_forward_aux_includes_exact_state_boundaries(time: int) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
     args = _inputs(time, heads=1)
-    _, final_state, aux = chunk_forward(*args[:6], args[6], scale=0.125, return_aux=True)
+    output, final_state, aux = chunk_forward(*args[:6], args[6], scale=0.125, return_aux=True)
     torch.cuda.synchronize()
 
     assert aux.state_boundaries.shape == (1, (time + 15) // 16 + 1, 1, 128, 128)
     assert aux.state_boundaries.dtype == torch.float32
+    assert all(
+        tensor.dtype == torch.float32
+        for tensor in (
+            aux.y,
+            aux.u,
+            aux.q_gamma,
+            aux.k_tail,
+            aux.decay_end,
+            aux.aqk,
+        )
+    )
     torch.testing.assert_close(aux.state_boundaries[:, 0], args[6], atol=0, rtol=0)
     torch.testing.assert_close(aux.state_boundaries[:, -1], final_state, atol=0, rtol=0)
+
+    expected_output, expected_final_state = chunkwise_forward_reference(
+        *args[:6], args[6], scale=0.125, chunk_size=16
+    )
+    torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
+    final_atol = 1.5e-3 if time >= 512 else 1e-3 if time % 16 == 0 else 2e-4
+    final_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    torch.testing.assert_close(
+        final_state,
+        expected_final_state,
+        atol=final_atol,
+        rtol=final_rtol,
+    )
 
     expected_boundaries = [args[6]]
     running_state = args[6]
@@ -214,3 +284,54 @@ def test_chunk_forward_aux_includes_exact_state_boundaries(time: int) -> None:
         atol=boundary_atol,
         rtol=boundary_rtol,
     )
+
+    if time == 1024:
+        compact_output, compact_final_state = chunk_forward(*args[:6], args[6], scale=0.125)
+        torch.cuda.synchronize()
+        torch.testing.assert_close(output, compact_output, atol=3e-2, rtol=3e-2)
+        torch.testing.assert_close(
+            final_state,
+            compact_final_state,
+            atol=1.5e-3,
+            rtol=3e-2,
+        )
+
+
+@pytest.mark.cuda
+def test_chunk_forward_fp16_avoids_algebra_overflow() -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+
+    shape = (1, 1024, 1, 128)
+    q = torch.zeros(shape, device="cuda", dtype=torch.float16)
+    k = torch.zeros_like(q)
+    v = torch.zeros_like(q)
+    g = torch.zeros(shape, device="cuda", dtype=torch.float32)
+    beta = torch.zeros_like(q)
+    w = torch.zeros_like(q)
+    initial_state = torch.zeros((1, 1, 128, 128), device="cuda", dtype=torch.float32)
+    q[0, 0, 0, 0] = 8.0
+    k[0, 0, 0, 0] = 2.0
+    v[0, 0, 0, 0] = 60_000.0
+    beta[0, 0, 0, 0] = 1.0
+    w[0, 0, 0, 0] = 1.0
+    initial_state[0, 0, 0, 0] = 40_000.0
+
+    output, final_state = chunk_forward(q, k, v, g, beta, w, initial_state, scale=0.125)
+    expected_output, expected_state = chunkwise_forward_reference(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state,
+        scale=0.125,
+        chunk_size=16,
+    )
+    torch.cuda.synchronize()
+
+    assert torch.isfinite(output).all()
+    assert torch.isfinite(final_state).all()
+    torch.testing.assert_close(output, expected_output, atol=1.0, rtol=0)
+    torch.testing.assert_close(final_state, expected_state, atol=1.0, rtol=0)

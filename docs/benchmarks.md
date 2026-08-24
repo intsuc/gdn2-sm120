@@ -42,13 +42,16 @@ CuTe-versus-official comparison.
 
 | Path | B | T | H | Warmup / samples | CuTe median | Official median | Speedup | max diff |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| chunk forward | 1 | 16 | 16 | 40 / 300 | 36.3 | 180.4 | **4.97x** | 1.32e-3 |
-| chunk forward | 1 | 64 | 16 | 40 / 300 | 42.6 | 183.9 | **4.32x** | 1.36e-3 |
-| chunk forward | 1 | 128 | 16 | 40 / 300 | 50.7 | 183.7 | **3.62x** | 1.60e-3 |
-| chunk forward | 1 | 256 | 16 | 40 / 300 | 73.1 | 186.7 | **2.55x** | 1.39e-3 |
-| chunk forward | 1 | 512 | 16 | 40 / 300 | 110.9 | 186.0 | **1.68x** | 1.43e-3 |
-| chunk forward | 1 | 1024 | 16 | 40 / 300 | 192.6 | 187.3 | 0.97x | 1.37e-3 |
-| chunk forward | 1 | 2048 | 16 | 40 / 300 | 354.8 | 237.8 | 0.67x | 1.40e-3 |
+| chunk forward | 1 | 16 | 16 | 40 / 300 | 35.3 | 181.8 | **5.15x** | 1.32e-3 |
+| chunk forward | 1 | 64 | 16 | 40 / 300 | 40.4 | 181.7 | **4.49x** | 1.36e-3 |
+| chunk forward | 1 | 128 | 16 | 40 / 300 | 47.6 | 180.9 | **3.80x** | 1.60e-3 |
+| chunk forward | 1 | 256 | 16 | 40 / 300 | 66.1 | 182.3 | **2.76x** | 1.39e-3 |
+| chunk forward | 1 | 512 | 16 | 40 / 300 | 65.9 | 181.6 | **2.76x** | 1.43e-3 |
+| chunk forward | 1 | 1024 | 16 | 40 / 300 | 102.9 | 183.4 | **1.78x** | 1.37e-3 |
+| chunk forward | 1 | 2048 | 16 | 40 / 300 | 172.5 | 236.4 | **1.37x** | 1.40e-3 |
+| chunk forward | 1 | 4096 | 16 | 20 / 100 | 446.1 | 476.4 | **1.07x** | 1.38e-3 |
+| chunk forward | 1 | 8192 | 16 | 20 / 100 | 978.0 | 1036.4 | **1.06x** | 1.41e-3 |
+| chunk forward | 1 | 16384 | 16 | 10 / 50 | 1889.5 | 2111.5 | **1.12x** | 1.50e-3 |
 | chunk backward | 1 | 16 | 16 | 50 / 200 | 111.9 | 274.3 | **2.45x** | 3.91e-3 |
 | chunk backward | 1 | 64 | 16 | 100 / 300 | 152.8 | 279.4 | **1.83x** | 2.44e-3 |
 | chunk backward | 1 | 128 | 16 | 50 / 200 | 163.3 | 278.2 | **1.70x** | 2.20e-3 |
@@ -57,10 +60,10 @@ CuTe-versus-official comparison.
 | token forward | 1 | 1 | 32 | 50 / 200 | 21.0 | 25.8 | **1.23x** | 2.98e-8 |
 | token forward | 1 | 16 | 16 | 50 / 200 | 35.3 | 35.2 | 1.00x | 1.91e-6 |
 
-Forward stays ahead through T=512 and is within 3% at T=1024. Backward-only
-stays ahead through T=256. This extends the previous crossover from between
-T=64 and T=128 to between T=256 and T=512, while also removing the old
-T=128 correctness cap.
+Forward stays ahead at every measured point through T=16384. Backward-only
+stays ahead through T=256. The backward crossover moved from between T=64 and
+T=128 to between T=256 and T=512, while the checkpointed path also removed the
+old T=128 correctness cap.
 
 The long backward saves FP32 state boundaries and compact-WY auxiliaries in
 forward. To account for that work, the complete graph-build plus backward call
@@ -128,10 +131,11 @@ between old and new measurements.
 ## Interpretation
 
 The optimization goal is met for all three kernel families and now extends to
-substantially longer chunk sequences. It does not imply a win at every length:
-forward crosses between T=512 and T=1024, while backward-only crosses between
-T=256 and T=512. At T=512 the complete forward+backward call still wins because
-the forward gain offsets the slower backward. Scaling to the paper's 16K-token
-training sweep, reducing checkpoint/workspace memory, additional dimensions,
-packed sequences, and fused normalization/gates remain separate milestones;
-the measured B1/H16 results must not be extrapolated to those workloads.
+substantially longer chunk sequences. Forward remains faster at all measured
+lengths through T=16384, while backward-only crosses between T=256 and T=512.
+At T=512 the complete forward+backward call still wins because the forward gain
+offsets the slower backward. The 16K point is a forward-only measurement, not a
+complete training-throughput result. Reducing checkpoint/workspace memory,
+additional dimensions, packed sequences, and fused normalization/gates remain
+separate milestones; the measured B1/H16 results must not be extrapolated to
+those workloads.

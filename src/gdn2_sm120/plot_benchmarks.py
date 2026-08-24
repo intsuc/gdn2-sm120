@@ -239,7 +239,13 @@ def _speedup_label(speedup: float) -> tuple[str, str]:
     return f"≈{speedup:.2f}×", "#854D0E"
 
 
-def _plot_chunk_panel(axis: Any, points: list[BenchmarkPoint], title: str) -> None:
+def _plot_chunk_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    title: str,
+    *,
+    log_latency: bool = False,
+) -> None:
     cute_color = "#2563EB"
     triton_color = "#475569"
     xs = [math.log2(point.time) for point in points]
@@ -279,14 +285,15 @@ def _plot_chunk_panel(axis: Any, points: list[BenchmarkPoint], title: str) -> No
             fontsize=8.5,
         )
         label, color = _speedup_label(point.speedup)
+        speedup_y = maximum * (1.32 if log_latency else 1.16)
         axis.text(
             x,
-            maximum * 1.16,
+            speedup_y,
             label,
             ha="center",
             va="center",
             color=color,
-            fontsize=9,
+            fontsize=8 if log_latency else 9,
             fontweight="bold",
         )
 
@@ -298,9 +305,20 @@ def _plot_chunk_panel(axis: Any, points: list[BenchmarkPoint], title: str) -> No
     axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
     axis.set_xticks(xs, [str(point.time) for point in points])
     axis.set_xlabel("Sequence length T (log₂ spacing)")
-    axis.set_ylabel("Median latency (µs / call)")
-    axis.set_ylim(0.0, maximum * 1.27)
-    axis.grid(axis="y", color="#E2E8F0", linewidth=0.8)
+    if log_latency:
+        minimum = min((*cute, *triton))
+        axis.set_yscale("log", base=2)
+        first_power = math.floor(math.log2(minimum))
+        last_power = math.ceil(math.log2(maximum))
+        ticks = [2.0**power for power in range(first_power, last_power + 1)]
+        axis.set_yticks(ticks, [f"{tick:g}" for tick in ticks])
+        axis.set_ylabel("Median latency (µs / call, log₂ scale)")
+        axis.set_ylim(2.0 ** (first_power - 0.45), maximum * 1.72)
+        axis.grid(axis="y", which="major", color="#E2E8F0", linewidth=0.8)
+    else:
+        axis.set_ylabel("Median latency (µs / call)")
+        axis.set_ylim(0.0, maximum * 1.27)
+        axis.grid(axis="y", color="#E2E8F0", linewidth=0.8)
     axis.set_axisbelow(True)
 
 
@@ -397,7 +415,12 @@ def render_benchmarks(
         figsize=(15.5, 5.7),
         gridspec_kw={"width_ratios": (1.25, 1.05, 0.85), "wspace": 0.30},
     )
-    _plot_chunk_panel(axes[0], by_mode["chunk-forward"], MODE_TITLES["chunk-forward"])
+    _plot_chunk_panel(
+        axes[0],
+        by_mode["chunk-forward"],
+        MODE_TITLES["chunk-forward"],
+        log_latency=True,
+    )
     _plot_chunk_panel(axes[1], by_mode["chunk-backward"], MODE_TITLES["chunk-backward"])
     _plot_token_panel(axes[2], by_mode["token-forward"])
 
