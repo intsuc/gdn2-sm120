@@ -24,6 +24,64 @@ _CHUNK_SPEEDUP_ROW_Y = 0.945
 
 
 @dataclass(frozen=True)
+class PlotPalette:
+    """Semantic colors for one static plot theme."""
+
+    background: str
+    foreground: str
+    axis_label: str
+    tick: str
+    muted: str
+    border: str
+    grid: str
+    connector: str
+    cute: str
+    triton: str
+    speedup_positive: str
+    speedup_negative: str
+    speedup_neutral: str
+    crossover: str
+    crossover_alpha: float
+
+
+_LIGHT_PALETTE = PlotPalette(
+    background="#FFFFFF",
+    foreground="#0F172A",
+    axis_label="#334155",
+    tick="#475569",
+    muted="#64748B",
+    border="#CBD5E1",
+    grid="#E2E8F0",
+    connector="#CBD5E1",
+    cute="#2563EB",
+    triton="#475569",
+    speedup_positive="#166534",
+    speedup_negative="#B91C1C",
+    speedup_neutral="#854D0E",
+    crossover="#F59E0B",
+    crossover_alpha=0.08,
+)
+_DARK_PALETTE = PlotPalette(
+    background="#0D1117",
+    foreground="#F0F6FC",
+    axis_label="#C9D1D9",
+    tick="#8B949E",
+    muted="#8B949E",
+    border="#484F58",
+    grid="#30363D",
+    connector="#484F58",
+    cute="#58A6FF",
+    triton="#C9D1D9",
+    speedup_positive="#3FB950",
+    speedup_negative="#FF7B72",
+    speedup_neutral="#D29922",
+    crossover="#D29922",
+    crossover_alpha=0.14,
+)
+_PLOT_PALETTES = {"light": _LIGHT_PALETTE, "dark": _DARK_PALETTE}
+
+
+@dataclass(frozen=True)
 class BenchmarkPoint:
     """The validated subset of one current benchmark result used by the plot."""
 
@@ -237,12 +295,23 @@ def load_benchmarks(paths: list[Path]) -> BenchmarkSuite:
     )
 
 
-def _speedup_label(speedup: float) -> tuple[str, str]:
+def _plot_palette(theme: str) -> PlotPalette:
+    try:
+        return _PLOT_PALETTES[theme]
+    except KeyError as error:
+        choices = ", ".join(sorted(_PLOT_PALETTES))
+        raise ValueError(f"unsupported plot theme {theme!r}; choose one of: {choices}") from error
+
+
+def _speedup_label(
+    speedup: float,
+    palette: PlotPalette = _LIGHT_PALETTE,
+) -> tuple[str, str]:
     if speedup >= 1.01:
-        return f"{speedup:.2f}×", "#166534"
+        return f"{speedup:.2f}×", palette.speedup_positive
     if speedup <= 0.99:
-        return f"{speedup:.2f}×", "#B91C1C"
-    return f"≈{speedup:.2f}×", "#854D0E"
+        return f"{speedup:.2f}×", palette.speedup_negative
+    return f"≈{speedup:.2f}×", palette.speedup_neutral
 
 
 def _plot_chunk_panel(
@@ -251,11 +320,12 @@ def _plot_chunk_panel(
     title: str,
     *,
     log_latency: bool = False,
+    palette: PlotPalette = _LIGHT_PALETTE,
 ) -> None:
     from matplotlib.patches import Rectangle
 
-    cute_color = "#2563EB"
-    triton_color = "#475569"
+    cute_color = palette.cute
+    triton_color = palette.triton
     xs = [math.log2(point.time) for point in points]
     cute = [point.cute_median_us for point in points]
     triton = [point.triton_median_us for point in points]
@@ -283,12 +353,18 @@ def _plot_chunk_panel(
     for x, point in zip(xs, points, strict=True):
         low = min(point.cute_median_us, point.triton_median_us)
         high = max(point.cute_median_us, point.triton_median_us)
-        axis.vlines(x, low, high, color="#CBD5E1", linewidth=1.0, zorder=1)
+        axis.vlines(x, low, high, color=palette.connector, linewidth=1.0, zorder=1)
 
     for left, right in zip(points, points[1:], strict=False):
         if (left.speedup - 1.0) * (right.speedup - 1.0) < 0.0:
             left_x, right_x = math.log2(left.time), math.log2(right.time)
-            axis.axvspan(left_x, right_x, color="#F59E0B", alpha=0.08, zorder=-1)
+            axis.axvspan(
+                left_x,
+                right_x,
+                color=palette.crossover,
+                alpha=palette.crossover_alpha,
+                zorder=-1,
+            )
 
     axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
     axis.set_xticks(
@@ -314,11 +390,11 @@ def _plot_chunk_panel(
         axis.set_yticks(ticks, [f"{tick:g}" for tick in ticks])
         axis.set_ylabel("Median latency (µs / call, log₂ scale)")
         axis.set_ylim(2.0**lower_power, 2.0**upper_power)
-        axis.grid(axis="y", which="major", color="#E2E8F0", linewidth=0.8)
+        axis.grid(axis="y", which="major", color=palette.grid, linewidth=0.8)
     else:
         axis.set_ylabel("Median latency (µs / call)")
         axis.set_ylim(0.0, maximum / _CHUNK_DATA_TOP_FRACTION)
-        axis.grid(axis="y", color="#E2E8F0", linewidth=0.8)
+        axis.grid(axis="y", color=palette.grid, linewidth=0.8)
     axis.set_axisbelow(True)
 
     # Values use predictable rows keyed with the same marker shapes and colors
@@ -329,7 +405,7 @@ def _plot_chunk_panel(
             1.0,
             1.0 - _CHUNK_RAIL_BOTTOM,
             transform=axis.transAxes,
-            facecolor="white",
+            facecolor=palette.background,
             edgecolor="none",
             zorder=5,
             gid="chunk-value-rail",
@@ -340,14 +416,14 @@ def _plot_chunk_panel(
             [0.0, 1.0],
             [y, y],
             transform=axis.transAxes,
-            color="#E2E8F0",
+            color=palette.grid,
             linewidth=0.75,
             zorder=6,
             clip_on=False,
         )
 
     for symbol, y, color, size in (
-        ("×", _CHUNK_SPEEDUP_ROW_Y, "#166534", 8.2),
+        ("×", _CHUNK_SPEEDUP_ROW_Y, palette.speedup_positive, 8.2),
         ("■", _CHUNK_TRITON_ROW_Y, triton_color, 7.2),
         ("●", _CHUNK_CUTE_ROW_Y, cute_color, 7.2),
     ):
@@ -368,7 +444,7 @@ def _plot_chunk_panel(
 
     rail_transform = axis.get_xaxis_transform()
     for x, point in zip(xs, points, strict=True):
-        speedup_label, speedup_color = _speedup_label(point.speedup)
+        speedup_label, speedup_color = _speedup_label(point.speedup, palette)
         for text, y, color, size, weight in (
             (speedup_label, _CHUNK_SPEEDUP_ROW_Y, speedup_color, 7.8, "bold"),
             (
@@ -403,16 +479,21 @@ def _plot_chunk_panel(
             [x, x],
             [_CHUNK_RAIL_BOTTOM - 0.012, _CHUNK_RAIL_BOTTOM + 0.012],
             transform=rail_transform,
-            color="#CBD5E1",
+            color=palette.connector,
             linewidth=0.8,
             zorder=7,
             clip_on=False,
         )
 
 
-def _plot_token_panel(axis: Any, points: list[BenchmarkPoint]) -> None:
-    cute_color = "#2563EB"
-    triton_color = "#475569"
+def _plot_token_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    *,
+    palette: PlotPalette = _LIGHT_PALETTE,
+) -> None:
+    cute_color = palette.cute
+    triton_color = palette.triton
     positions = list(range(len(points)))
     width = 0.34
     cute = axis.bar(
@@ -436,7 +517,7 @@ def _plot_token_panel(axis: Any, points: list[BenchmarkPoint]) -> None:
     axis.bar_label(cute, fmt="%.1f", padding=3, color=cute_color, fontsize=8.5)
     axis.bar_label(triton, fmt="%.1f", padding=3, color=triton_color, fontsize=8.5)
     for position, point in zip(positions, points, strict=True):
-        label, color = _speedup_label(point.speedup)
+        label, color = _speedup_label(point.speedup, palette)
         axis.text(
             position,
             maximum * 1.16,
@@ -455,43 +536,18 @@ def _plot_token_panel(axis: Any, points: list[BenchmarkPoint]) -> None:
     axis.set_xlabel("Measured shape (different H; not a scaling line)")
     axis.set_ylabel("Median latency (µs / call)")
     axis.set_ylim(0.0, maximum * 1.27)
-    axis.grid(axis="y", color="#E2E8F0", linewidth=0.8)
+    axis.grid(axis="y", color=palette.grid, linewidth=0.8)
     axis.set_axisbelow(True)
 
 
-def render_benchmarks(
+def _render_benchmark_figure(
+    plt: Any,
     suite: BenchmarkSuite,
     output: Path,
     *,
-    title: str | None = None,
+    title: str | None,
+    palette: PlotPalette,
 ) -> None:
-    """Render one PNG or SVG without requiring an interactive display."""
-
-    if output.suffix.lower() not in {".png", ".svg"}:
-        raise ValueError("output filename must end in .png or .svg")
-    try:
-        import matplotlib
-    except ModuleNotFoundError as error:
-        raise RuntimeError(
-            "matplotlib is required; run this command through `uv run --group visualization`"
-        ) from error
-    matplotlib.use("Agg", force=True)
-    from matplotlib import pyplot as plt
-
-    plt.rcParams.update(
-        {
-            "font.family": "DejaVu Sans",
-            "axes.edgecolor": "#CBD5E1",
-            "axes.labelcolor": "#334155",
-            "xtick.color": "#475569",
-            "ytick.color": "#475569",
-            "text.color": "#0F172A",
-            "figure.facecolor": "white",
-            "axes.facecolor": "white",
-            "svg.hashsalt": "gdn2-sm120-benchmarks",
-        }
-    )
-
     by_mode = {mode: [point for point in suite.points if point.mode == mode] for mode in MODES}
     missing = [mode for mode, points in by_mode.items() if not points]
     if missing:
@@ -508,14 +564,16 @@ def render_benchmarks(
         by_mode["chunk-forward"],
         MODE_TITLES["chunk-forward"],
         log_latency=True,
+        palette=palette,
     )
     _plot_chunk_panel(
         axes[1],
         by_mode["chunk-backward"],
         MODE_TITLES["chunk-backward"],
         log_latency=True,
+        palette=palette,
     )
-    _plot_token_panel(axes[2], by_mode["token-forward"])
+    _plot_token_panel(axes[2], by_mode["token-forward"], palette=palette)
 
     display_device = suite.device.removeprefix("NVIDIA ")
     figure.suptitle(
@@ -535,7 +593,7 @@ def render_benchmarks(
         "labels are official/CuTe speedup",
         ha="left",
         fontsize=10,
-        color="#475569",
+        color=palette.tick,
     )
     handles, labels = axes[0].get_legend_handles_labels()
     figure.legend(
@@ -554,12 +612,88 @@ def render_benchmarks(
         f"official commit {suite.official_commit[:12]}",
         ha="left",
         fontsize=8.5,
-        color="#64748B",
+        color=palette.muted,
     )
     figure.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.21)
     output.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output, dpi=180, facecolor="white", metadata={"Creator": "gdn2-sm120"})
-    plt.close(figure)
+    try:
+        figure.savefig(
+            output,
+            dpi=180,
+            facecolor=palette.background,
+            metadata={"Creator": "gdn2-sm120"},
+        )
+    finally:
+        plt.close(figure)
+
+
+def _validate_output(output: Path) -> None:
+    if output.suffix.lower() not in {".png", ".svg"}:
+        raise ValueError("output filename must end in .png or .svg")
+
+
+def render_benchmarks(
+    suite: BenchmarkSuite,
+    output: Path,
+    *,
+    title: str | None = None,
+    theme: str = "light",
+) -> None:
+    """Render one themed PNG or SVG without requiring an interactive display."""
+
+    _validate_output(output)
+    palette = _plot_palette(theme)
+    try:
+        import matplotlib
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "matplotlib is required; run this command through `uv run --group visualization`"
+        ) from error
+    matplotlib.use("Agg", force=True)
+    from matplotlib import pyplot as plt
+
+    style = {
+        "font.family": "DejaVu Sans",
+        "axes.edgecolor": palette.border,
+        "axes.labelcolor": palette.axis_label,
+        "xtick.color": palette.tick,
+        "ytick.color": palette.tick,
+        "text.color": palette.foreground,
+        "figure.facecolor": palette.background,
+        "axes.facecolor": palette.background,
+        "svg.hashsalt": "gdn2-sm120-benchmarks",
+    }
+    with matplotlib.rc_context(style):
+        _render_benchmark_figure(
+            plt,
+            suite,
+            output,
+            title=title,
+            palette=palette,
+        )
+
+
+def _default_dark_output(light_output: Path) -> Path:
+    return light_output.with_name(f"{light_output.stem}-dark{light_output.suffix}")
+
+
+def render_benchmark_themes(
+    suite: BenchmarkSuite,
+    light_output: Path,
+    *,
+    dark_output: Path | None = None,
+    title: str | None = None,
+) -> tuple[Path, Path]:
+    """Render light/fallback and dark variants, returning their output paths."""
+
+    resolved_dark_output = dark_output or _default_dark_output(light_output)
+    if resolved_dark_output == light_output:
+        raise ValueError("light and dark output paths must be different")
+    _validate_output(light_output)
+    _validate_output(resolved_dark_output)
+    render_benchmarks(suite, light_output, title=title, theme="light")
+    render_benchmarks(suite, resolved_dark_output, title=title, theme="dark")
+    return light_output, resolved_dark_output
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -575,7 +709,15 @@ def _parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("docs/assets/benchmark-results-sm120.png"),
-        help="destination .png or .svg (default: %(default)s)",
+        help=(
+            "light/fallback destination .png or .svg; a -dark sibling is also written "
+            "(default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
+        "--dark-output",
+        type=Path,
+        help="optional dark-theme destination (default: -dark sibling of --output)",
     )
     parser.add_argument("--title", help="optional figure title override")
     return parser
@@ -586,10 +728,16 @@ def main() -> None:
     args = parser.parse_args()
     try:
         suite = load_benchmarks(args.inputs)
-        render_benchmarks(suite, args.output, title=args.title)
+        light_output, dark_output = render_benchmark_themes(
+            suite,
+            args.output,
+            dark_output=args.dark_output,
+            title=args.title,
+        )
     except (OSError, RuntimeError, ValueError) as error:
         parser.error(str(error))
-    print(f"wrote {args.output}")
+    print(f"wrote {light_output}")
+    print(f"wrote {dark_output}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 import gdn2_sm120.plot_benchmarks as plot_benchmarks
-from gdn2_sm120.plot_benchmarks import load_benchmarks, render_benchmarks
+from gdn2_sm120.plot_benchmarks import (
+    load_benchmarks,
+    render_benchmark_themes,
+    render_benchmarks,
+)
 
 
 def _record(
@@ -166,21 +170,64 @@ def test_renders_headless_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert chunk_scales == {"Chunk forward": "log", "Chunk backward": "log"}
 
 
-def test_chunk_values_render_in_a_rail_above_the_data() -> None:
+def test_renders_light_and_dark_pngs(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import image as matplotlib_image
+
+    source = tmp_path / "suite.json"
+    light_output = tmp_path / "plot.png"
+    dark_output = tmp_path / "plot-dark.png"
+    _three_mode_suite(source)
+    suite = load_benchmarks([source])
+
+    outputs = render_benchmark_themes(suite, light_output)
+
+    assert outputs == (light_output, dark_output)
+    for output in outputs:
+        image = output.read_bytes()
+        assert image.startswith(b"\x89PNG\r\n\x1a\n")
+        assert len(image) > 10_000
+    assert light_output.read_bytes() != dark_output.read_bytes()
+    assert matplotlib_image.imread(light_output)[0, 0, :3] == pytest.approx((1.0, 1.0, 1.0))
+    assert matplotlib_image.imread(dark_output)[0, 0, :3] == pytest.approx(
+        (13 / 255, 17 / 255, 23 / 255)
+    )
+
+    with pytest.raises(ValueError, match="must be different"):
+        render_benchmark_themes(suite, light_output, dark_output=light_output)
+    partial_output = tmp_path / "partial.png"
+    with pytest.raises(ValueError, match="must end in"):
+        render_benchmark_themes(suite, partial_output, dark_output=tmp_path / "dark.txt")
+    assert not partial_output.exists()
+    with pytest.raises(ValueError, match="unsupported plot theme"):
+        render_benchmarks(suite, tmp_path / "invalid.png", theme="sepia")
+
+
+@pytest.mark.parametrize("theme", ("light", "dark"))
+def test_chunk_values_render_in_a_rail_above_the_data(theme: str) -> None:
     pytest.importorskip("matplotlib")
     from matplotlib import pyplot as plt
+    from matplotlib.colors import to_hex
 
     source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
     suite = load_benchmarks([source])
+    palette = plot_benchmarks._plot_palette(theme)
 
     for mode in ("chunk-forward", "chunk-backward"):
         points = [point for point in suite.points if point.mode == mode]
         figure, axis = plt.subplots()
         try:
-            plot_benchmarks._plot_chunk_panel(axis, points, mode, log_latency=True)
+            plot_benchmarks._plot_chunk_panel(
+                axis,
+                points,
+                mode,
+                log_latency=True,
+                palette=palette,
+            )
             figure.canvas.draw()
 
             rail = next(patch for patch in axis.patches if patch.get_gid() == "chunk-value-rail")
+            assert to_hex(rail.get_facecolor()).upper() == palette.background
             rail_bottom = min(
                 axis.transAxes.inverted().transform(rail.get_transform().transform(vertex))[1]
                 for vertex in rail.get_path().vertices
@@ -189,6 +236,7 @@ def test_chunk_values_render_in_a_rail_above_the_data() -> None:
             series = [
                 line for line in axis.lines if line.get_label() in {"CuTe SM120", "Official Triton"}
             ]
+            assert {line.get_color() for line in series} == {palette.cute, palette.triton}
             data_top = max(
                 axis.transAxes.inverted().transform(line.get_transform().transform((x, y)))[1]
                 for line in series

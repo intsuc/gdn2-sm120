@@ -92,17 +92,21 @@ boundary storage relative to FP32, but retaining both boundary sets plus
 compact-WY workspace still makes the CuTe path use more memory than the
 official implementation.
 
-The exact values behind the per-kernel table and the README figure are tracked in
+The exact values behind the per-kernel table and the README light/dark figures
+are tracked in
 [`data/benchmark-results-sm120.json`](data/benchmark-results-sm120.json). The
 plotter validates the current benchmark schema, consistent environments,
 positive finite timings, stored speedups, and duplicate logical shapes before
-rendering:
+rendering both themes:
 
 ```bash
 uv run --group visualization gdn2-sm120-plot \
   docs/data/benchmark-results-sm120.json \
   --output docs/assets/benchmark-results-sm120.png
 ```
+
+`--output` is the light/fallback path; the dark-theme image is written alongside
+it with `-dark` appended to the stem.
 
 The plot uses medians only. A minimum is not a dispersion estimate or confidence
 interval, so it is deliberately not drawn as an error bar. Token points with

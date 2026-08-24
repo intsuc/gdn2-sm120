@@ -112,17 +112,25 @@ Python/autograd call boundary, warmup count, and CUDA-event measurement. An
 untimed check compares outputs, state, or all gradients before timing. See
 [`docs/benchmarks.md`](docs/benchmarks.md) for the measured matrix and caveats.
 
-![Gated DeltaNet-2 SM120 benchmark latency comparison](docs/assets/benchmark-results-sm120.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmark-results-sm120-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmark-results-sm120.png">
+  <img alt="Gated DeltaNet-2 SM120 benchmark latency comparison" src="docs/assets/benchmark-results-sm120.png">
+</picture>
 
-The figure is generated from the tracked, validated
+The light/fallback and dark-theme figures are generated from the tracked,
+validated
 [`docs/data/benchmark-results-sm120.json`](docs/data/benchmark-results-sm120.json)
-suite. Regenerate it without installing the official benchmark stack:
+suite. Regenerate both without installing the official benchmark stack:
 
 ```bash
 uv run --group visualization gdn2-sm120-plot \
   docs/data/benchmark-results-sm120.json \
   --output docs/assets/benchmark-results-sm120.png
 ```
+
+`--output` names the light/fallback figure; the plotter also writes the sibling
+`docs/assets/benchmark-results-sm120-dark.png`.
 
 Representative BF16 medians on the target workstation are:
 
