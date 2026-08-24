@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gdn2-sm120"
+version = "0.1.0"
+description = "SM120-optimized CuTe DSL kernels for Gated DeltaNet-2"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "gdn2-sm120 contributors" }]
+keywords = ["cuda", "cute-dsl", "gated-deltanet", "sm120"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "apache-tvm-ffi>=0.1.11",
+  "nvidia-cutlass-dsl[cu13]==4.7.0",
+  "torch==2.13.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "pytest-xdist>=3.8",
+  "ruff>=0.12",
+]
+benchmark = [
+  "einops>=0.8",
+  "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention.git@4b02d15d6a68700181b180235be62a9fb95d2a38",
+  "ninja>=1.13",
+  "pandas>=2.3",
+  "triton>=3.5",
+]
+visualization = [
+  "matplotlib>=3.10",
+]
+
+[project.scripts]
+gdn2-sm120-bench = "gdn2_sm120.benchmark:main"
+gdn2-sm120-plot = "gdn2_sm120.plot_benchmarks:main"
+
+[project.urls]
+Repository = "https://github.com/intsuc/gdn2-sm120"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gdn2_sm120"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+  "cuda: requires an NVIDIA CUDA GPU",
+  "slow: long-running correctness or benchmark test",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.uv]
+default-groups = ["dev"]
