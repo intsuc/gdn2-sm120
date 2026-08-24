@@ -21,6 +21,8 @@ claim about complete model throughput.
 - warmup/sample counts are recorded per row
 - compilation and Triton autotuning occur during warmup and are excluded
 - compared at each implementation's public Python call boundary
+- the canonical token sweep fixes B=1/H=32 and varies T over powers of two;
+  connected token points therefore differ only in sequence length
 - backward-only builds each graph before timing and uses
   `torch.autograd.grad(..., retain_graph=True)` for both
 - training rebuilds the forward graph inside each timed call and consumes it
@@ -33,6 +35,11 @@ claim about complete model throughput.
 The benchmark reports the median and minimum of synchronized per-call CUDA
 event samples. GPU clocks, thermals, display load, and other CUDA processes can
 still move small-kernel latency, so rerun on the deployment machine.
+
+The token CLI exercises the default allocation-returning API. The reusable
+`out`/`final_state_out` and explicit `inplace_final_state` modes are intended for
+allocation-free serving loops and should be measured as a separate experiment;
+the current publication schema does not encode allocation mode.
 
 ## Results (2026-08-25)
 
@@ -62,14 +69,24 @@ CuTe-versus-official comparison.
 | chunk backward | 1 | 4096 | 16 | 20 / 100 | 1318.8 | 1465.4 | **1.11x** | 3.91e-3 |
 | chunk backward | 1 | 8192 | 16 | 20 / 100 | 2838.6 | 3126.1 | **1.10x** | 2.93e-3 |
 | chunk backward | 1 | 16384 | 16 | 10 / 50 | 5810.6 | 6353.5 | **1.09x** | 1.95e-3 |
-| token forward | 1 | 1 | 32 | 50 / 200 | 21.0 | 25.8 | **1.23x** | 2.98e-8 |
-| token forward | 1 | 16 | 16 | 50 / 200 | 35.3 | 35.2 | 1.00x | 1.91e-6 |
+| token forward | 1 | 1 | 32 | 25 / 100 | 13.3 | 25.4 | **1.91x** | 2.98e-8 |
+| token forward | 1 | 2 | 32 | 25 / 100 | 14.8 | 25.2 | **1.70x** | 5.96e-8 |
+| token forward | 1 | 4 | 32 | 25 / 100 | 16.5 | 26.0 | **1.57x** | 5.96e-8 |
+| token forward | 1 | 8 | 32 | 25 / 100 | 18.6 | 28.8 | **1.55x** | 2.38e-7 |
+| token forward | 1 | 16 | 32 | 25 / 100 | 22.8 | 35.0 | **1.54x** | 3.05e-5 |
+| token forward | 1 | 32 | 32 | 25 / 100 | 31.0 | 47.2 | **1.52x** | 3.05e-5 |
+| token forward | 1 | 64 | 32 | 25 / 100 | 49.4 | 71.9 | **1.45x** | 6.10e-5 |
+| token forward | 1 | 128 | 32 | 25 / 100 | 84.3 | 120.2 | **1.43x** | 6.10e-5 |
 
 Forward and backward both stay ahead at every measured point through T=16384.
 The compact-WY dispatch at T=128 reduces CuTe backward latency from 172.9 us at
 T=64 to 126.4 us despite doubling the sequence length. Its advantage narrows
 from 2.45x at T=16 to 1.09x at T=16384 without a measured crossover, while the
 checkpointed path also removes the old T=128 correctness cap.
+
+The fixed B1/H32 token sweep stays ahead at all eight sampled decode lengths.
+Its public-call speedup is 1.91x at T=1 and remains 1.43x at T=128; these rows
+include the default output and final-state allocations on both public paths.
 
 For full-chunk BF16 training at T>=128, forward checkpoints Y, Q-gamma,
 K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32.
@@ -109,8 +126,11 @@ uv run --group visualization gdn2-sm120-plot \
 it with `-dark` appended to the stem.
 
 The plot uses medians only. A minimum is not a dispersion estimate or confidence
-interval, so it is deliberately not drawn as an error bar. Token points with
-different head counts are separate bars rather than a connected scaling curve.
+interval, so it is deliberately not drawn as an error bar. When all token points
+share B and H, the token panel connects them at log₂-spaced T positions and
+labels the official/CuTe speedup at every sample. If either B or H differs, it
+falls back to independent grouped bars rather than implying a scaling curve
+across different workloads.
 
 ## Commands
 
@@ -129,9 +149,12 @@ uv run gdn2-sm120-bench \
   --mode chunk-training --batch 1 --time 256 --heads 16 --dtype bf16 \
   --warmup 30 --repeats 100 --official-repo /tmp/GatedDeltaNet-2
 
-uv run gdn2-sm120-bench \
-  --mode token-forward --batch 1 --time 1 --heads 32 --dtype bf16 \
-  --warmup 5 --repeats 50 --official-repo /tmp/GatedDeltaNet-2
+for time in 1 2 4 8 16 32 64 128; do
+  uv run gdn2-sm120-bench \
+    --mode token-forward --batch 1 --time "$time" --heads 32 --dtype bf16 \
+    --warmup 25 --repeats 100 --official-repo /tmp/GatedDeltaNet-2 \
+    --json "benchmark-results/token-t${time}.json"
+done
 ```
 
 Pass `--json benchmark-results/name.json` to persist a machine-readable result.
@@ -143,10 +166,11 @@ between old and new measurements.
 ## Interpretation
 
 The optimization goal is met for all three kernel families and now extends to
-substantially longer chunk sequences. Both chunk forward and backward-only are
-faster at every measured length through T=16384; the backward margin gradually
-narrows but remains 1.09x at the longest point. These are primitive-level
-latencies, not complete training-throughput measurements. Reducing
+substantially longer chunk sequences. Chunk forward and backward-only are
+faster at every measured length through T=16384, and token forward is faster at
+every fixed-B1/H32 point through T=128. The backward margin gradually narrows
+but remains 1.09x at the longest point. These are primitive-level latencies,
+not complete training-throughput measurements. Reducing
 checkpoint/workspace memory, additional dimensions, packed sequences, and
 fused normalization/gates remain separate milestones; the measured B1/H16
 results must not be extrapolated to those workloads.

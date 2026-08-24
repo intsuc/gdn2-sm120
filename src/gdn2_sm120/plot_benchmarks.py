@@ -21,6 +21,8 @@ _CHUNK_RAIL_BOTTOM = 0.735
 _CHUNK_CUTE_ROW_Y = 0.775
 _CHUNK_TRITON_ROW_Y = 0.855
 _CHUNK_SPEEDUP_ROW_Y = 0.945
+_TOKEN_DATA_TOP_FRACTION = 0.82
+_TOKEN_SPEEDUP_ROW_Y = 0.94
 
 
 @dataclass(frozen=True)
@@ -492,6 +494,104 @@ def _plot_token_panel(
     *,
     palette: PlotPalette = _LIGHT_PALETTE,
 ) -> None:
+    shapes = {(point.batch, point.heads) for point in points}
+    if len(shapes) == 1:
+        _plot_token_scaling_panel(axis, points, palette=palette)
+    else:
+        _plot_token_bar_panel(axis, points, palette=palette)
+
+
+def _plot_token_scaling_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    *,
+    palette: PlotPalette = _LIGHT_PALETTE,
+) -> None:
+    """Draw a fixed-B/H token sweep with logarithmic T spacing."""
+
+    points = sorted(points, key=lambda point: point.time)
+    batch = points[0].batch
+    heads = points[0].heads
+    xs = [math.log2(point.time) for point in points]
+    cute = [point.cute_median_us for point in points]
+    triton = [point.triton_median_us for point in points]
+    maximum = max((*cute, *triton))
+
+    axis.plot(
+        xs,
+        cute,
+        color=palette.cute,
+        marker="o",
+        linewidth=2.4,
+        label="CuTe SM120",
+        zorder=3,
+    )
+    axis.plot(
+        xs,
+        triton,
+        color=palette.triton,
+        marker="s",
+        linewidth=2.2,
+        label="Official Triton",
+        zorder=3,
+    )
+    for x, point in zip(xs, points, strict=True):
+        axis.vlines(
+            x,
+            min(point.cute_median_us, point.triton_median_us),
+            max(point.cute_median_us, point.triton_median_us),
+            color=palette.connector,
+            linewidth=1.0,
+            zorder=1,
+        )
+        label, color = _speedup_label(point.speedup, palette)
+        axis.text(
+            x,
+            _TOKEN_SPEEDUP_ROW_Y,
+            label,
+            transform=axis.get_xaxis_transform(),
+            ha="center",
+            va="center",
+            color=color,
+            fontsize=7.8,
+            fontweight="bold",
+            zorder=5,
+            gid="token-speedup-label",
+        )
+
+    axis.plot(
+        [0.0, 1.0],
+        [0.88, 0.88],
+        transform=axis.transAxes,
+        color=palette.grid,
+        linewidth=0.75,
+        zorder=4,
+        clip_on=False,
+    )
+    axis.set_title(MODE_TITLES["token-forward"], loc="left", fontweight="bold", fontsize=12)
+    axis.set_xticks(
+        xs,
+        [str(point.time) for point in points],
+        rotation=35 if len(points) > 6 else 0,
+        ha="right" if len(points) > 6 else "center",
+        rotation_mode="anchor",
+    )
+    axis.set_xlabel(f"Sequence length T (log₂ spacing) · B{batch}/H{heads}")
+    axis.set_ylabel("Median latency (µs / call)")
+    axis.set_ylim(0.0, maximum / _TOKEN_DATA_TOP_FRACTION)
+    axis.grid(axis="y", color=palette.grid, linewidth=0.8)
+    axis.set_axisbelow(True)
+    axis.set_gid("token-scaling-panel")
+
+
+def _plot_token_bar_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    *,
+    palette: PlotPalette = _LIGHT_PALETTE,
+) -> None:
+    """Keep unrelated token shapes visually independent."""
+
     cute_color = palette.cute
     triton_color = palette.triton
     positions = list(range(len(points)))
@@ -533,7 +633,7 @@ def _plot_token_panel(
         positions,
         [f"B{point.batch} · T{point.time}\nH{point.heads}" for point in points],
     )
-    axis.set_xlabel("Measured shape (different H; not a scaling line)")
+    axis.set_xlabel("Measured shape (mixed B/H; not a scaling line)")
     axis.set_ylabel("Median latency (µs / call)")
     axis.set_ylim(0.0, maximum * 1.27)
     axis.grid(axis="y", color=palette.grid, linewidth=0.8)
@@ -553,11 +653,13 @@ def _render_benchmark_figure(
     if missing:
         raise ValueError(f"plot requires all three modes; missing: {', '.join(missing)}")
 
+    token_shapes = {(point.batch, point.heads) for point in by_mode["token-forward"]}
+    token_width = 1.10 if len(token_shapes) == 1 else 0.80
     figure, axes = plt.subplots(
         1,
         3,
         figsize=(16.5, 5.9),
-        gridspec_kw={"width_ratios": (1.25, 1.25, 0.80), "wspace": 0.30},
+        gridspec_kw={"width_ratios": (1.25, 1.25, token_width), "wspace": 0.30},
     )
     _plot_chunk_panel(
         axes[0],

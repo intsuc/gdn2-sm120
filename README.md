@@ -10,7 +10,8 @@ The repository contains three working CUDA paths:
   algebraic pipeline for long BF16 prefill;
 - a checkpointed training backward that dispatches between short recurrence,
   chunk-parallel recurrence, and compact-WY warp-MMA VJPs;
-- a register-resident token/recurrent forward for decoding.
+- a register-resident token/recurrent forward for decoding, with aligned
+  128-bit state I/O and allocation-free serving options.
 
 All three are written in CuTe DSL, compile specifically for `sm_120`, use the
 active PyTorch CUDA stream, and cache TVM-FFI executors after the first JIT
@@ -41,12 +42,17 @@ benchmark and production warm paths reuse an in-process compiled executor.
 
 ## API
 
-The optimized specialization accepts contiguous, 16-byte-aligned tensors.
+The optimized specialization accepts contiguous tensors and benefits from
+16-byte alignment.
 Sequence tensors use `[batch, time, heads, 128]` layout. Q/K/V/erase/write
 tensors use BF16 or FP16, log-decay `g` may use FP32, and state tensors use FP32
-`[batch, heads, 128, 128]`. The output scale defaults to `1/sqrt(128)`.
+`[batch, heads, 128, 128]`. The token path detects aligned state buffers for
+128-bit loads and stores and retains a scalar fallback for contiguous unaligned
+state views. The output scale defaults to `1/sqrt(128)`.
 
 ```python
+import torch
+
 from gdn2_sm120 import chunk_gdn2, recurrent_gdn2
 
 # Training: backward() selects the native CuTe schedule by sequence length.
@@ -65,7 +71,40 @@ loss.backward()
 
 # Decoding or short recurrent evaluation: forward-only.
 output, final_state = recurrent_gdn2(q, k, v, g, beta, w, initial_state)
+
+# Allocation-free serving: reuse both destinations.
+output_buffer = torch.empty_like(v)
+state_buffer = torch.empty_like(initial_state)
+output, final_state = recurrent_gdn2(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    w,
+    initial_state,
+    out=output_buffer,
+    final_state_out=state_buffer,
+)
+
+# Stateful decoding: explicitly update the supplied state in place.
+output, initial_state = recurrent_gdn2(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    w,
+    initial_state,
+    out=output_buffer,
+    inplace_final_state=True,
+)
 ```
+
+`final_state_out` and `inplace_final_state=True` are mutually exclusive. The
+default remains allocation-based and never mutates `initial_state`; explicit
+output buffers are validated for shape, dtype, device, contiguity, and unsafe
+storage overlap.
 
 The primitive expects already-activated erase/write gates and log-decay.
 Q/K L2 normalization, gate projections, grouped-value head expansion, packed
@@ -132,6 +171,11 @@ uv run --group visualization gdn2-sm120-plot \
 `--output` names the light/fallback figure; the plotter also writes the sibling
 `docs/assets/benchmark-results-sm120-dark.png`.
 
+When every token-forward point has the same batch and head count, its panel is
+a connected sequence-length sweep with log₂-spaced T positions and a speedup
+label at every sample. Mixed B/H token shapes remain independent grouped bars,
+so the figure does not imply a scaling curve across different workloads.
+
 Representative BF16 medians on the target workstation are:
 
 | Path | Shape | CuTe SM120 | Official Triton | Speedup |
@@ -144,7 +188,8 @@ Representative BF16 medians on the target workstation are:
 | chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
 | chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
 | chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
-| token forward | B1 T1 H32 | 21.0 us | 25.8 us | **1.23x** |
+| token forward | B1 T1 H32 | 13.3 us | 25.4 us | **1.91x** |
+| token forward | B1 T128 H32 | 84.3 us | 120.2 us | **1.43x** |
 
 ## Why FROST is not copied directly
 
@@ -176,13 +221,16 @@ This is an alpha, shape-specialized kernel project rather than a drop-in
 replacement for every official option. The primary production shape
 `K=V=128` is implemented and numerically checked in BF16/FP16, including FP32
 log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
-and non-default CUDA streams. In the measured B1/H16 BF16 sweep, both chunk
-forward and chunk backward remain faster than the official path at every
-sampled length through T=16384. Backward speedup ranges from 2.45x at T=16 to
-1.09x at T=16384. The checkpointed path trades memory for speed: compact BF16
-boundaries halve checkpoint bytes relative to FP32, but the CuTe path still
-retains both boundary sets and compact-WY workspace and therefore uses more
-memory than the official path. Additional dimensions, packed sequences, and
-further reducing checkpoint memory remain optimization work.
+non-default CUDA streams, unaligned contiguous recurrent states, reusable
+output buffers, and explicit in-place recurrent state updates. In the measured
+B1/H16 BF16 sweep, both chunk forward and chunk backward remain faster than the
+official path at every sampled length through T=16384. Backward speedup ranges
+from 2.45x at T=16 to 1.09x at T=16384. The fixed B1/H32 token sweep is 1.91x
+faster at T=1 and 1.43x faster at T=128. The checkpointed path trades memory
+for speed: compact BF16 boundaries halve checkpoint bytes relative to FP32, but
+the CuTe path still retains both boundary sets and compact-WY workspace and
+therefore uses more memory than the official path. Additional dimensions,
+packed sequences, and further reducing checkpoint memory remain optimization
+work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

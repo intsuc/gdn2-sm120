@@ -134,9 +134,37 @@ lane owns four of the 128 key rows. Its FP32 state fragment remains in registers
 through the runtime token loop. Erase and output dot products use warp-shuffle
 reductions, so the kernel uses no shared memory.
 
-The sequence-length mode is dynamic in the compiled tensor descriptor, so a
-launcher is reused across different decode lengths for the same batch/head and
-dtype specialization.
+The warp advances its eight columns as one independent instruction-level
+parallel group. It first applies decay to every resident column, interleaves the
+eight erase reductions, and then interleaves the updates and output reductions.
+Only lanes 0--7 load the warp's eight V/W values; indexed shuffles broadcast
+those source values to the remaining lanes.
+
+Each lane's eight contiguous state columns form two 128-bit transactions when
+the state base is 16-byte aligned. Initial and final state descriptors are
+specialized independently for alignment, while contiguous unaligned buffers
+retain scalar state I/O. This changes only the transfer width: both paths use
+the same row/column ownership and FP32 recurrence.
+
+PyTorch may assign arbitrary strides to singleton axes of an otherwise
+contiguous tensor. The JIT path canonicalizes only its compile-time descriptor
+view; runtime tensors keep their original pointer and view, avoiding per-launch
+normalization while preserving identical logical addresses.
+
+Batch size and head count are compile-time launcher specializations. Sequence
+length remains dynamic in the compiled tensor descriptors and in the runtime
+recurrent loop, so one launcher is reused across different decode lengths for
+the same batch/head, dtype, initial-state, and alignment specialization. Scale
+remains a runtime FP32 value and therefore does not create a new executor for
+every caller-provided scale.
+
+The default public call allocates fresh output and final-state tensors and does
+not mutate inputs. Serving code can instead provide `out` and
+`final_state_out`, or request the narrowly defined
+`inplace_final_state=True` mode. Exact initial/final-state identity is safe
+because each state element is read and written only by its owning CTA. Partial
+state aliases and output/input aliases are rejected because they could cross
+CTA ownership or overwrite values that another CTA has not loaded.
 
 ## SM120 architecture decision
 
@@ -159,7 +187,12 @@ An incompatible explicit value is rejected before launch, as is a GPU whose
 compute capability is not 12.0. `cute.compile(..., options="--enable-tvm-ffi")`
 produces an executor cached by the static shape/dtype/device specialization.
 Runtime calls pass raw PyTorch tensors and the current PyTorch CUDA stream.
-Compilation and launch occur in the input tensor's CUDA device context.
+The common single-visible-GPU path avoids a redundant device-context guard;
+multi-GPU calls compile and launch inside the input tensor's device context.
+Capability/device-count queries and a bounded set of non-owning CUDA stream
+wrappers are cached, while the stream handle itself remains a runtime launch
+argument. Switching PyTorch streams therefore does not require recompilation or
+silently send work to the stream used during JIT compilation.
 
 The cache is process-local. The first invocation includes compilation and is
 not representative of steady-state latency.

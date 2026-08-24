@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import math
 import os
+import struct
 import threading
 from collections.abc import Sequence
+from functools import cache, lru_cache
 
 # CuTe DSL consumes the target while importing its compilation support.
 os.environ.setdefault("CUTE_DSL_ARCH", "sm_120")
@@ -33,14 +35,30 @@ _ROWS_PER_LANE = _DIM // 32
 _VALUE_TILE = 32
 _VALUE_TILES = _DIM // _VALUE_TILE
 _COLS_PER_WARP = _VALUE_TILE // _WARPS
+_COL_GROUP = 8
 
 # Calling a decorated JIT function retraces enough Python to dominate a small
 # recurrent launch.  Keep explicit compiled executors instead.  T is dynamic in
 # their tensor layouts, so a cache entry is reusable across sequence lengths.
 _COMPILED_LAUNCHERS: dict[
-    tuple[torch.device, torch.dtype, torch.dtype, int, int, bool], object
+    tuple[torch.device, torch.dtype, torch.dtype, int, int, bool, bool, bool], object
 ] = {}
 _COMPILE_LOCK = threading.Lock()
+
+
+@cache
+def _device_capability(device: torch.device) -> tuple[int, int]:
+    return torch.cuda.get_device_capability(device)
+
+
+@lru_cache(maxsize=1)
+def _cuda_device_count() -> int:
+    return torch.cuda.device_count()
+
+
+@lru_cache(maxsize=64)
+def _driver_stream(stream_handle: int) -> cuda.CUstream:
+    return cuda.CUstream(stream_handle)
 
 
 @cute.kernel
@@ -55,7 +73,7 @@ def _token_forward_kernel(
     output: cute.Tensor,
     final_state: cute.Tensor,
     time: cutlass.Int32,
-    heads: cutlass.Int32,
+    heads: cutlass.Constexpr,
     scale: cutlass.Float32,
     has_initial_state: cutlass.Constexpr,
 ):
@@ -76,11 +94,18 @@ def _token_forward_kernel(
 
     for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
         key_row = lane + row_slot * 32
-        for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
-            value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + col_slot
-            if cutlass.const_expr(has_initial_state):
-                state[row_slot, col_slot] = initial_state[batch, head, key_row, value_col]
-            else:
+        if cutlass.const_expr(has_initial_state):
+            g_state_row = cute.local_tile(
+                initial_state[batch, head, key_row, None],
+                (_COLS_PER_WARP,),
+                (value_tile * _WARPS + warp,),
+            )
+            state_row = cute.make_rmem_tensor((_COLS_PER_WARP,), cutlass.Float32)
+            cute.autovec_copy(g_state_row, state_row)
+            for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
+                state[row_slot, col_slot] = state_row[col_slot]
+        else:
+            for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
                 state[row_slot, col_slot] = cutlass.Float32(0.0)
 
     # Four row-dependent values are shared by all eight columns handled by a
@@ -89,7 +114,6 @@ def _token_forward_kernel(
     k_rows = cute.make_rmem_tensor(_ROWS_PER_LANE, cutlass.Float32)
     decay_rows = cute.make_rmem_tensor(_ROWS_PER_LANE, cutlass.Float32)
     erase_rows = cute.make_rmem_tensor(_ROWS_PER_LANE, cutlass.Float32)
-    decayed_rows = cute.make_rmem_tensor(_ROWS_PER_LANE, cutlass.Float32)
 
     token = cutlass.Int32(0)
     while token < time:
@@ -104,44 +128,69 @@ def _token_forward_kernel(
             decay_rows[row_slot] = cute.exp(g_value)
             erase_rows[row_slot] = beta_value * k_value
 
-        # Lanes 0..15 and 16..31 load the same set of 16 values.  This avoids
-        # a divergent bounds check while preserving contiguous memory access;
-        # each value is then broadcast from its low-half lane.
-        lane_col = lane & (_COLS_PER_WARP - 1)
-        lane_value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + lane_col
-        v_lane = v[batch, token, head, lane_value_col].to(cutlass.Float32)
-        w_lane = w[batch, token, head, lane_value_col].to(cutlass.Float32)
+        # Only the eight source lanes load this warp's value columns; shuffle
+        # broadcasts distribute them to the other lanes below.
+        v_lane = cutlass.Float32(0.0)
+        w_lane = cutlass.Float32(0.0)
+        if lane < _COLS_PER_WARP:
+            lane_value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + lane
+            v_lane = v[batch, token, head, lane_value_col].to(cutlass.Float32)
+            w_lane = w[batch, token, head, lane_value_col].to(cutlass.Float32)
 
+        # Decay all columns first, then advance the eight independent columns
+        # together. Interleaving their reductions hides the long sequence of
+        # warp-shuffle dependencies in a column-at-a-time schedule.
         for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
-            erase_partial = cutlass.Float32(0.0)
             for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
-                decayed = state[row_slot, col_slot] * decay_rows[row_slot]
-                decayed_rows[row_slot] = decayed
-                erase_partial += erase_rows[row_slot] * decayed
+                state[row_slot, col_slot] *= decay_rows[row_slot]
 
-            erased = cute.arch.warp_reduction_sum(erase_partial)
-            value_value = cute.arch.shuffle_sync(v_lane, col_slot)
-            write_value = cute.arch.shuffle_sync(w_lane, col_slot)
-            update_value = write_value * value_value - erased
-
-            output_partial = cutlass.Float32(0.0)
+        for col_group in cutlass.range_constexpr(_COLS_PER_WARP // _COL_GROUP):
+            erase_partials = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
+            erase_partials.fill(0.0)
             for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
-                updated = decayed_rows[row_slot] + k_rows[row_slot] * update_value
-                state[row_slot, col_slot] = updated
-                output_partial += q_rows[row_slot] * updated
+                for group_slot in cutlass.range_constexpr(_COL_GROUP):
+                    col_slot = col_group * _COL_GROUP + group_slot
+                    erase_partials[group_slot] += erase_rows[row_slot] * state[row_slot, col_slot]
 
-            output_value = cute.arch.warp_reduction_sum(output_partial)
-            if lane == 0:
-                value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + col_slot
-                output[batch, token, head, value_col] = output_value.to(output.element_type)
+            update_values = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
+            for group_slot in cutlass.range_constexpr(_COL_GROUP):
+                col_slot = col_group * _COL_GROUP + group_slot
+                erased = cute.arch.warp_reduction_sum(erase_partials[group_slot])
+                value_value = cute.arch.shuffle_sync(v_lane, col_slot)
+                write_value = cute.arch.shuffle_sync(w_lane, col_slot)
+                update_values[group_slot] = write_value * value_value - erased
+
+            output_partials = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
+            output_partials.fill(0.0)
+            for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
+                for group_slot in cutlass.range_constexpr(_COL_GROUP):
+                    col_slot = col_group * _COL_GROUP + group_slot
+                    updated = (
+                        state[row_slot, col_slot] + k_rows[row_slot] * update_values[group_slot]
+                    )
+                    state[row_slot, col_slot] = updated
+                    output_partials[group_slot] += q_rows[row_slot] * updated
+
+            for group_slot in cutlass.range_constexpr(_COL_GROUP):
+                output_value = cute.arch.warp_reduction_sum(output_partials[group_slot])
+                if lane == 0:
+                    col_slot = col_group * _COL_GROUP + group_slot
+                    value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + col_slot
+                    output[batch, token, head, value_col] = output_value.to(output.element_type)
 
         token += 1
 
     for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
         key_row = lane + row_slot * 32
+        g_state_row = cute.local_tile(
+            final_state[batch, head, key_row, None],
+            (_COLS_PER_WARP,),
+            (value_tile * _WARPS + warp,),
+        )
+        state_row = cute.make_rmem_tensor((_COLS_PER_WARP,), cutlass.Float32)
         for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
-            value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + col_slot
-            final_state[batch, head, key_row, value_col] = state[row_slot, col_slot]
+            state_row[col_slot] = state[row_slot, col_slot]
+        cute.autovec_copy(state_row, g_state_row)
 
 
 @cute.jit
@@ -155,9 +204,9 @@ def _launch_token_forward(
     initial_state: cute.Tensor,
     output: cute.Tensor,
     final_state: cute.Tensor,
-    batch: cutlass.Int32,
+    batch: cutlass.Constexpr,
     time: cutlass.Int32,
-    heads: cutlass.Int32,
+    heads: cutlass.Constexpr,
     scale: cutlass.Float32,
     has_initial_state: cutlass.Constexpr,
     stream: cuda.CUstream,
@@ -221,7 +270,7 @@ def _validate_token_inputs(
         raise ValueError("all inputs must be on the same CUDA device")
     if any(not tensor.is_contiguous() for tensor in tensors):
         raise ValueError("all inputs must be contiguous")
-    if torch.cuda.get_device_capability(q.device) != (12, 0):
+    if _device_capability(q.device) != (12, 0):
         raise RuntimeError("this kernel is specialized for SM120 GPUs")
     effective_arch = os.environ.get("CUTE_DSL_ARCH")
     if effective_arch != "sm_120":
@@ -243,6 +292,51 @@ def _validate_token_inputs(
             raise ValueError("initial_state must be contiguous")
 
     return batch, time, heads
+
+
+def _canonical_strides(shape: torch.Size | tuple[int, ...]) -> tuple[int, ...]:
+    running = 1
+    reversed_strides = []
+    for size in reversed(shape):
+        reversed_strides.append(running)
+        running *= max(size, 1)
+    return tuple(reversed(reversed_strides))
+
+
+def _canonical_view(tensor: torch.Tensor, strides: tuple[int, ...]) -> torch.Tensor:
+    if tensor.stride() == strides:
+        return tensor
+    return tensor.as_strided(tensor.shape, strides)
+
+
+def _validate_output_buffer(
+    name: str,
+    tensor: torch.Tensor,
+    shape: torch.Size | tuple[int, ...],
+    dtype: torch.dtype,
+    device: torch.device,
+) -> None:
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"{name} must be a torch.Tensor or None")
+    if tensor.shape != shape:
+        raise ValueError(f"{name} must have shape {tuple(shape)}")
+    if tensor.dtype != dtype:
+        raise TypeError(f"{name} must use {dtype}")
+    if tensor.device != device:
+        raise ValueError(f"{name} must be on the same CUDA device as q")
+    if not tensor.is_contiguous():
+        raise ValueError(f"{name} must be contiguous")
+
+
+def _byte_span(tensor: torch.Tensor) -> tuple[int, int]:
+    """Return the half-open byte range occupied by a contiguous tensor."""
+
+    start = tensor.data_ptr()
+    return start, start + tensor.nbytes
+
+
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < left[1] and right[0] < right[1] and left[0] < right[1] and right[0] < left[1]
 
 
 def _sequence_tensor_for_compile(tensor: torch.Tensor) -> cute.Tensor:
@@ -273,8 +367,19 @@ def _get_compiled_launcher(
     has_initial_state: bool,
     stream: cuda.CUstream,
 ):
-    device = torch.device(q.device.type, q.device.index)
-    key = (device, q.dtype, g.dtype, batch, heads, has_initial_state)
+    device = q.device
+    state_aligned = state_input.data_ptr() % 16 == 0
+    final_state_aligned = final_state.data_ptr() % 16 == 0
+    key = (
+        device,
+        q.dtype,
+        g.dtype,
+        batch,
+        heads,
+        has_initial_state,
+        state_aligned,
+        final_state_aligned,
+    )
     compiled = _COMPILED_LAUNCHERS.get(key)
     if compiled is not None:
         return compiled
@@ -284,20 +389,42 @@ def _get_compiled_launcher(
     with _COMPILE_LOCK:
         compiled = _COMPILED_LAUNCHERS.get(key)
         if compiled is None:
+            # PyTorch permits arbitrary strides only on size-zero/one axes of
+            # an otherwise contiguous tensor. Canonicalize compile descriptors;
+            # runtime tensors have the same logical addresses and can retain
+            # their original views without per-launch wrapper work.
+            sequence_strides = _canonical_strides(q.shape)
+            q_compile, k_compile, v_compile, g_compile, beta_compile, w_compile = (
+                _canonical_view(tensor, sequence_strides) for tensor in (q, k, v, g, beta, w)
+            )
+            state_strides = _canonical_strides(state_input.shape)
+            state_input_compile = _canonical_view(state_input, state_strides)
+            output_compile = _canonical_view(output, sequence_strides)
+            final_state_compile = _canonical_view(final_state, state_strides)
             compiled = cute.compile(
                 _launch_token_forward,
-                _sequence_tensor_for_compile(q),
-                _sequence_tensor_for_compile(k),
-                _sequence_tensor_for_compile(v),
-                _sequence_tensor_for_compile(g),
-                _sequence_tensor_for_compile(beta),
-                _sequence_tensor_for_compile(w),
-                from_dlpack(state_input, use_32bit_stride=True, enable_tvm_ffi=True),
-                _sequence_tensor_for_compile(output),
-                from_dlpack(final_state, use_32bit_stride=True, enable_tvm_ffi=True),
-                cutlass.Int32(batch),
+                _sequence_tensor_for_compile(q_compile),
+                _sequence_tensor_for_compile(k_compile),
+                _sequence_tensor_for_compile(v_compile),
+                _sequence_tensor_for_compile(g_compile),
+                _sequence_tensor_for_compile(beta_compile),
+                _sequence_tensor_for_compile(w_compile),
+                from_dlpack(
+                    state_input_compile,
+                    assumed_align=16 if state_aligned else None,
+                    use_32bit_stride=True,
+                    enable_tvm_ffi=True,
+                ),
+                _sequence_tensor_for_compile(output_compile),
+                from_dlpack(
+                    final_state_compile,
+                    assumed_align=16 if final_state_aligned else None,
+                    use_32bit_stride=True,
+                    enable_tvm_ffi=True,
+                ),
+                batch,
                 cutlass.Int32(time),
-                cutlass.Int32(heads),
+                heads,
                 cutlass.Float32(output_scale),
                 has_initial_state,
                 stream,
@@ -305,6 +432,56 @@ def _get_compiled_launcher(
             )
             _COMPILED_LAUNCHERS[key] = compiled
     return compiled
+
+
+def _invoke_token_forward(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    w: torch.Tensor,
+    state_input: torch.Tensor,
+    output: torch.Tensor,
+    final_state: torch.Tensor,
+    batch: int,
+    time: int,
+    heads: int,
+    output_scale: float,
+    has_initial_state: bool,
+) -> None:
+    stream = _driver_stream(torch.cuda.current_stream().cuda_stream)
+    compiled = _get_compiled_launcher(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        state_input,
+        output,
+        final_state,
+        batch,
+        time,
+        heads,
+        output_scale,
+        has_initial_state,
+        stream,
+    )
+    compiled(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        state_input,
+        output,
+        final_state,
+        time,
+        output_scale,
+        stream,
+    )
 
 
 def token_forward(
@@ -316,6 +493,10 @@ def token_forward(
     w: torch.Tensor,
     initial_state: torch.Tensor | None = None,
     scale: float | None = None,
+    *,
+    out: torch.Tensor | None = None,
+    final_state_out: torch.Tensor | None = None,
+    inplace_final_state: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Evaluate the GDN2 recurrence with the SM120 token-forward kernel.
 
@@ -324,19 +505,82 @@ def token_forward(
     ``initial_state`` is optional float32 ``[B, H, 128, 128]`` state.  Gate
     activations are intentionally outside this primitive, matching
     :func:`gdn2_sm120.reference.recurrent_forward_reference`.
+
+    ``out`` and ``final_state_out`` may provide reusable output buffers.
+    ``inplace_final_state=True`` explicitly updates and returns
+    ``initial_state``; the default remains allocation-based and does not
+    mutate inputs.
     """
 
     batch, time, heads = _validate_token_inputs(q, k, v, g, beta, w, initial_state)
-    output_scale = float(scale) if scale is not None else 1.0 / math.sqrt(_DIM)
-    if not math.isfinite(output_scale):
+    requested_scale = float(scale) if scale is not None else 1.0 / math.sqrt(_DIM)
+    if not math.isfinite(requested_scale):
         raise ValueError("scale must be finite")
+    try:
+        output_scale = struct.unpack("=f", struct.pack("=f", requested_scale))[0]
+    except OverflowError as error:
+        raise ValueError("scale must be representable as float32") from error
+    if not math.isfinite(output_scale):
+        raise ValueError("scale must be representable as finite float32")
 
-    output = torch.empty((batch, time, heads, _DIM), device=q.device, dtype=q.dtype)
-    final_state = torch.empty((batch, heads, _DIM, _DIM), device=q.device, dtype=torch.float32)
+    if out is None:
+        output = torch.empty_like(q)
+    else:
+        _validate_output_buffer("out", out, q.shape, q.dtype, q.device)
+        output = out
+
+    state_shape = (batch, heads, _DIM, _DIM)
+    if inplace_final_state:
+        if initial_state is None:
+            raise ValueError("inplace_final_state=True requires initial_state")
+        if final_state_out is not None:
+            raise ValueError("final_state_out cannot be used with inplace_final_state=True")
+        final_state = initial_state
+    elif final_state_out is not None:
+        _validate_output_buffer(
+            "final_state_out", final_state_out, state_shape, torch.float32, q.device
+        )
+        final_state = final_state_out
+    else:
+        final_state = (
+            torch.empty_like(initial_state)
+            if initial_state is not None
+            else torch.empty(state_shape, device=q.device, dtype=torch.float32)
+        )
+
+    inputs = (q, k, v, g, beta, w)
+    if out is not None or final_state_out is not None or inplace_final_state:
+        sequence_spans = tuple(_byte_span(tensor) for tensor in inputs)
+        initial_span = _byte_span(initial_state) if initial_state is not None else None
+        output_span = _byte_span(output) if out is not None else None
+        final_span = _byte_span(final_state)
+    else:
+        sequence_spans = ()
+        initial_span = output_span = final_span = None
+
+    if out is not None and output.numel() != 0:
+        assert output_span is not None
+        if any(_spans_overlap(output_span, span) for span in sequence_spans) or (
+            initial_span is not None and _spans_overlap(output_span, initial_span)
+        ):
+            raise ValueError("out must not overlap an input tensor")
+        assert final_span is not None
+        if _spans_overlap(output_span, final_span):
+            raise ValueError("out and final_state must not overlap")
+    if final_state_out is not None:
+        assert final_span is not None
+        if any(_spans_overlap(final_span, span) for span in sequence_spans) or (
+            initial_span is not None and _spans_overlap(final_span, initial_span)
+        ):
+            raise ValueError("final_state_out must not overlap an input tensor")
+    if inplace_final_state:
+        assert final_span is not None
+        if any(_spans_overlap(final_span, span) for span in sequence_spans):
+            raise ValueError("initial_state must not overlap sequence inputs for in-place update")
     if time == 0:
         if initial_state is None:
             final_state.zero_()
-        else:
+        elif final_state is not initial_state:
             final_state.copy_(initial_state)
         return output, final_state
 
@@ -344,9 +588,8 @@ def token_forward(
     # the compile-time flag removes the uninitialized read from the kernel.
     state_input = final_state if initial_state is None else initial_state
 
-    with torch.cuda.device(q.device):
-        stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)
-        compiled = _get_compiled_launcher(
+    if _cuda_device_count() == 1:
+        _invoke_token_forward(
             q,
             k,
             v,
@@ -361,27 +604,25 @@ def token_forward(
             heads,
             output_scale,
             initial_state is not None,
-            stream,
         )
-        # Constexpr arguments are removed from a compiled executor's runtime
-        # signature.  Passing torch tensors directly uses its cached adapters
-        # and avoids retracing the sizeable unrolled kernel body.
-        compiled(
-            q,
-            k,
-            v,
-            g,
-            beta,
-            w,
-            state_input,
-            output,
-            final_state,
-            batch,
-            time,
-            heads,
-            output_scale,
-            stream,
-        )
+    else:
+        with torch.cuda.device(q.device):
+            _invoke_token_forward(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                w,
+                state_input,
+                output,
+                final_state,
+                batch,
+                time,
+                heads,
+                output_scale,
+                initial_state is not None,
+            )
 
     return output, final_state
 

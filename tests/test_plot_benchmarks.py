@@ -19,13 +19,14 @@ def _record(
     mode: str,
     time: int,
     *,
+    batch: int = 1,
     heads: int = 16,
     cute_us: float = 40.0,
     triton_us: float = 100.0,
 ) -> dict[str, object]:
     return {
         "mode": mode,
-        "batch": 1,
+        "batch": batch,
         "time": time,
         "heads": heads,
         "dtype": "bf16",
@@ -201,6 +202,91 @@ def test_renders_light_and_dark_pngs(tmp_path: Path) -> None:
     assert not partial_output.exists()
     with pytest.raises(ValueError, match="unsupported plot theme"):
         render_benchmarks(suite, tmp_path / "invalid.png", theme="sepia")
+
+
+@pytest.mark.parametrize("theme", ("light", "dark"))
+def test_fixed_shape_token_sweep_uses_log2_t_lines(
+    tmp_path: Path,
+    theme: str,
+) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = tmp_path / "token-sweep.json"
+    _write_suite(
+        source,
+        [
+            _record(
+                "token-forward",
+                time,
+                heads=32,
+                cute_us=20.0 + time,
+                triton_us=24.0 + time * 1.2,
+            )
+            for time in (1, 2, 4, 8, 16, 32, 64, 128)
+        ],
+    )
+    points = list(load_benchmarks([source]).points)
+    palette = plot_benchmarks._plot_palette(theme)
+    figure, axis = plt.subplots()
+    try:
+        plot_benchmarks._plot_token_panel(axis, points, palette=palette)
+        figure.canvas.draw()
+
+        assert axis.get_gid() == "token-scaling-panel"
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · B1/H32"
+        series = [
+            line for line in axis.lines if line.get_label() in {"CuTe SM120", "Official Triton"}
+        ]
+        assert len(series) == 2
+        assert {line.get_color() for line in series} == {palette.cute, palette.triton}
+        assert all(list(line.get_xdata()) == pytest.approx(range(8)) for line in series)
+        assert [tick.get_text() for tick in axis.get_xticklabels()] == [
+            "1",
+            "2",
+            "4",
+            "8",
+            "16",
+            "32",
+            "64",
+            "128",
+        ]
+        labels = [text.get_text() for text in axis.texts if text.get_gid() == "token-speedup-label"]
+        assert labels == [plot_benchmarks._speedup_label(point.speedup)[0] for point in points]
+        assert not axis.patches
+    finally:
+        plt.close(figure)
+
+
+def test_mixed_token_shapes_keep_grouped_bar_fallback(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = tmp_path / "mixed-token-shapes.json"
+    _write_suite(
+        source,
+        [
+            _record("token-forward", 1, heads=32, cute_us=21.0, triton_us=25.0),
+            _record("token-forward", 16, heads=16, cute_us=35.0, triton_us=36.0),
+            _record("token-forward", 32, batch=2, heads=16, cute_us=50.0, triton_us=52.0),
+        ],
+    )
+    points = list(load_benchmarks([source]).points)
+    figure, axis = plt.subplots()
+    try:
+        plot_benchmarks._plot_token_panel(axis, points)
+        figure.canvas.draw()
+
+        assert axis.get_gid() != "token-scaling-panel"
+        assert axis.get_xlabel() == "Measured shape (mixed B/H; not a scaling line)"
+        assert len(axis.patches) == 2 * len(points)
+        assert [tick.get_text() for tick in axis.get_xticklabels()] == [
+            "B1 · T1\nH32",
+            "B1 · T16\nH16",
+            "B2 · T32\nH16",
+        ]
+    finally:
+        plt.close(figure)
 
 
 @pytest.mark.parametrize("theme", ("light", "dark"))

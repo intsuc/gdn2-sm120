@@ -239,10 +239,25 @@ def recurrent_gdn2(
     initial_state: torch.Tensor | None = None,
     *,
     scale: float | None = None,
+    out: torch.Tensor | None = None,
+    final_state_out: torch.Tensor | None = None,
+    inplace_final_state: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run the forward-only token/recurrent SM120 kernel."""
 
-    return token_forward(q, k, v, g, beta, w, initial_state, scale=scale)
+    return token_forward(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state,
+        scale=scale,
+        out=out,
+        final_state_out=final_state_out,
+        inplace_final_state=inplace_final_state,
+    )
 
 
 __all__ = ["chunk_gdn2", "recurrent_gdn2"]
