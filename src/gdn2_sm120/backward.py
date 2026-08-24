@@ -1,25 +1,25 @@
 """SM120 CuTe DSL backward for the Gated Delta Rule-2 recurrence.
 
-The kernels are deliberately specialized for ``K == V == 128``.  Multi-token
-chunks launch one CTA for each ``(batch, head, 4-column value tile)`` so a
-small head count can occupy the whole GPU.  K-shaped gradients are emitted as
-FP32 tile partials and reduced in a second kernel.  The latency-sensitive
-single-token case retains a fused eight-warp CTA with no global partials.
+The kernels are deliberately specialized for ``K == V == 128``.  The
+final-state-only path handles up to 128 tokens with one CTA per four-column
+value tile; K-shaped gradients are emitted as FP32 tile partials and reduced
+in a second kernel.  The latency-sensitive single-token case retains a fused
+eight-warp CTA with no global partials.
 
-Warp shuffle reductions combine the lanes assigned to each value column and
-key row.  The current forward state lives in shared memory while the reverse
-state gradient stays distributed in registers.
-
-Only the final forward state is required.  At every token the previous state
-is reconstructed with the Sherman--Morrison inverse
+Those short paths reconstruct previous states from the final state with the
+Sherman--Morrison inverse
 
 ``y = S - k z^T; c = (r^T y) / (1 - r^T k); Sprev = (y + k c^T) / a``.
 
+Applying that inverse across hundreds of rounded FP32 updates is unstable for
+production-normalized keys.  When an initial state is available, the
+checkpoint path is selected from 128 tokens: it scans forward to recompute
+FP32 boundaries every 16 tokens, resets the reverse state to each saved chunk
+end, and applies the inverse only inside that chunk.  This is a sequential
+checkpoint/recompute algorithm, not a parallel WY backward.
+
 All recurrence arithmetic and reductions are float32.  Sequence gradients
 are cast back to the input dtype and ``d_initial_state`` remains float32.
-Because no forward checkpoints or initial state are provided to this API,
-sequences longer than 128 tokens are rejected: recovering earlier states from
-only the rounded FP32 final state is not numerically reliable beyond that.
 """
 
 from __future__ import annotations
@@ -49,13 +49,26 @@ _VALUE_TILES = _DIM // _TILED_V
 _TILED_KEYS_PER_LANE = 16
 _TILED_THREADS = 32
 _TILED_SMEM_BYTES = (_DIM * _TILED_V + 4 * _DIM) * 4
+# Compatibility name retained for callers that imported the former hard cap.
+# It is now the largest length handled by the final-state-only inverse path;
+# longer inputs dispatch to checkpoint/recompute.
 MAX_BACKWARD_TOKENS = 128
+
+_CHECKPOINT_CHUNK = 16
+_LONG_WARPS = 4
+_LONG_WARP_V = 4
+_LONG_V = _LONG_WARPS * _LONG_WARP_V
+_LONG_VALUE_TILES = _DIM // _LONG_V
+_LONG_KEYS_PER_LANE = 16
+_LONG_THREADS = _LONG_WARPS * 32
+_LONG_SMEM_BYTES = (_DIM * _LONG_V + 4 * _DIM + 4 * _LONG_WARPS * _DIM) * 4
 
 # FP32 state [128, 128] plus four [8, 128] cross-warp partial buffers.
 _SMEM_BYTES = (_DIM * _DIM + 4 * _WARPS * _DIM) * 4
 
 _COMPILED: dict[tuple[object, ...], object] = {}
 _TILED_COMPILED: dict[tuple[object, ...], object] = {}
+_CHECKPOINT_COMPILED: dict[tuple[object, ...], object] = {}
 _COMPILE_LOCK = threading.Lock()
 _SINGLE_CUDA_DEVICE: bool | None = None
 
@@ -88,6 +101,276 @@ def _oct_sum(value: cutlass.Float32) -> cutlass.Float32:
     value = value + cute.arch.shuffle_sync_bfly(value, offset=4)
     value = value + cute.arch.shuffle_sync_bfly(value, offset=8)
     return value + cute.arch.shuffle_sync_bfly(value, offset=16)
+
+
+@cute.kernel
+def _checkpoint_recompute_backward_kernel(
+    q: cute.Tensor,
+    k: cute.Tensor,
+    v: cute.Tensor,
+    g: cute.Tensor,
+    beta: cute.Tensor,
+    w: cute.Tensor,
+    initial_state: cute.Tensor,
+    do: cute.Tensor,
+    d_final_state: cute.Tensor,
+    checkpoints: cute.Tensor,
+    partial: cute.Tensor,
+    dv: cute.Tensor,
+    dw: cute.Tensor,
+    d_initial_state: cute.Tensor,
+    scale: cutlass.Float32,
+):
+    """Stable long backward using recomputed FP32 recurrence checkpoints."""
+
+    tidx, _, _ = cute.arch.thread_idx()
+    block, _, _ = cute.arch.block_idx()
+    value_tile = block % _LONG_VALUE_TILES
+    batch_head = block // _LONG_VALUE_TILES
+    batch = batch_head // q.shape[2]
+    head = batch_head - batch * q.shape[2]
+
+    warp = tidx >> 5
+    lane = tidx & 31
+    value_local = lane & 3
+    key_group = lane >> 2
+    tile_value_local = warp * _LONG_WARP_V + value_local
+    value_idx = value_tile * _LONG_V + tile_value_local
+
+    smem = cutlass.utils.SmemAllocator()
+    state = smem.allocate_tensor(
+        cutlass.Float32,
+        cute.make_layout((_DIM, _LONG_V), stride=(_LONG_V, 1)),
+        byte_alignment=16,
+    )
+    # k, r=beta*k, exp(g), and reciprocal exp(g) for the current token.
+    key_data = smem.allocate_tensor(
+        cutlass.Float32,
+        cute.make_layout((4, _DIM), stride=(_DIM, 1)),
+        byte_alignment=16,
+    )
+    tile_partial = smem.allocate_tensor(
+        cutlass.Float32,
+        cute.make_layout(
+            (4, _LONG_WARPS, _DIM),
+            stride=(_LONG_WARPS * _DIM, _DIM, 1),
+        ),
+        byte_alignment=16,
+    )
+    dstate = cute.make_rmem_tensor(cute.make_layout((_LONG_KEYS_PER_LANE,)), cutlass.Float32)
+
+    for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+        key_idx = key_group + 8 * key_iter
+        state[key_idx, tile_value_local] = initial_state[batch, head, key_idx, value_idx].to(
+            cutlass.Float32
+        )
+        dstate[key_iter] = d_final_state[batch, head, key_idx, value_idx].to(cutlass.Float32)
+
+    time = q.shape[1]
+    n_chunks = checkpoints.shape[1] - 1
+
+    # Materialize one FP32 recurrence state at every short-chunk boundary.
+    for chunk in cutlass.range(n_chunks, unroll=1):
+        for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+            key_idx = key_group + 8 * key_iter
+            checkpoints[batch, chunk, head, key_idx, value_idx] = state[key_idx, tile_value_local]
+
+        for token_local in cutlass.range_constexpr(_CHECKPOINT_CHUNK):
+            token = chunk * _CHECKPOINT_CHUNK + token_local
+            if token < time:
+                for cache_iter in cutlass.range_constexpr(_DIM // _LONG_THREADS):
+                    cache_key = tidx + _LONG_THREADS * cache_iter
+                    key_value = k[batch, token, head, cache_key].to(cutlass.Float32)
+                    beta_value = beta[batch, token, head, cache_key].to(cutlass.Float32)
+                    decay = cute.math.exp(
+                        g[batch, token, head, cache_key].to(cutlass.Float32),
+                        fastmath=False,
+                    )
+                    key_data[0, cache_key] = key_value
+                    key_data[1, cache_key] = beta_value * key_value
+                    key_data[2, cache_key] = decay
+                cute.arch.sync_threads()
+
+                erased_part = cutlass.Float32(0.0)
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    x_value = key_data[2, key_idx] * state[key_idx, tile_value_local]
+                    erased_part += key_data[1, key_idx] * x_value
+                update_value = w[batch, token, head, value_idx].to(cutlass.Float32) * v[
+                    batch, token, head, value_idx
+                ].to(cutlass.Float32) - _oct_sum(erased_part)
+
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    x_value = key_data[2, key_idx] * state[key_idx, tile_value_local]
+                    state[key_idx, tile_value_local] = x_value + key_data[0, key_idx] * update_value
+                # Every warp must finish consuming this token's shared key
+                # factors before any warp overwrites them for the next token.
+                cute.arch.sync_threads()
+
+    # Include the final boundary so every reverse chunk can begin at its saved
+    # end state without replaying that chunk's forward recurrence.
+    for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+        key_idx = key_group + 8 * key_iter
+        checkpoints[batch, n_chunks, head, key_idx, value_idx] = state[key_idx, tile_value_local]
+
+    # Reverse chunks sequentially because dS crosses chunk boundaries.  Each
+    # chunk resets S to its saved end and inverts at most 16 updates.
+    for reverse_chunk in cutlass.range(n_chunks, unroll=1):
+        chunk = n_chunks - 1 - reverse_chunk
+        chunk_start = chunk * _CHECKPOINT_CHUNK
+        length = cutlass.min(_CHECKPOINT_CHUNK, time - chunk_start)
+
+        for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+            key_idx = key_group + 8 * key_iter
+            state[key_idx, tile_value_local] = checkpoints[
+                batch, chunk + 1, head, key_idx, value_idx
+            ]
+
+        for reverse_local in cutlass.range_constexpr(_CHECKPOINT_CHUNK):
+            if reverse_local < length:
+                token_local = length - 1 - reverse_local
+                token = chunk_start + token_local
+                do_value = do[batch, token, head, value_idx].to(cutlass.Float32)
+
+                for cache_iter in cutlass.range_constexpr(_DIM // _LONG_THREADS):
+                    cache_key = tidx + _LONG_THREADS * cache_iter
+                    key_value = k[batch, token, head, cache_key].to(cutlass.Float32)
+                    beta_value = beta[batch, token, head, cache_key].to(cutlass.Float32)
+                    decay = cute.math.exp(
+                        g[batch, token, head, cache_key].to(cutlass.Float32),
+                        fastmath=False,
+                    )
+                    key_data[0, cache_key] = key_value
+                    key_data[1, cache_key] = beta_value * key_value
+                    key_data[2, cache_key] = decay
+                    key_data[3, cache_key] = cutlass.Float32(1.0) / decay
+                cute.arch.sync_threads()
+
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    q_value = q[batch, token, head, key_idx].to(cutlass.Float32)
+                    current_state = state[key_idx, tile_value_local]
+                    dstate[key_iter] += scale * q_value * do_value
+                    dq_part = _four_lane_sum(scale * current_state * do_value)
+                    if value_local == 0:
+                        tile_partial[0, warp, key_idx] = dq_part
+
+                denominator_part = cutlass.Float32(0.0)
+                y_dot_part = cutlass.Float32(0.0)
+                z_value = w[batch, token, head, value_idx].to(cutlass.Float32) * v[
+                    batch, token, head, value_idx
+                ].to(cutlass.Float32)
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    key_value = key_data[0, key_idx]
+                    r_value = key_data[1, key_idx]
+                    y_value = state[key_idx, tile_value_local] - key_value * z_value
+                    denominator_part += r_value * key_value
+                    y_dot_part += r_value * y_value
+
+                denominator = cutlass.Float32(1.0) - _oct_sum(denominator_part)
+                erased_value = _oct_sum(y_dot_part) / denominator
+                update_value = z_value - erased_value
+
+                du_part = cutlass.Float32(0.0)
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    du_part += key_data[0, key_idx] * dstate[key_iter]
+                du_value = _oct_sum(du_part)
+
+                if key_group == 0:
+                    v_value = v[batch, token, head, value_idx].to(cutlass.Float32)
+                    w_value = w[batch, token, head, value_idx].to(cutlass.Float32)
+                    dv[batch, token, head, value_idx] = (du_value * w_value).to(dv.element_type)
+                    dw[batch, token, head, value_idx] = (du_value * v_value).to(dw.element_type)
+
+                for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+                    key_idx = key_group + 8 * key_iter
+                    key_value = key_data[0, key_idx]
+                    r_value = key_data[1, key_idx]
+                    decay = key_data[2, key_idx]
+                    inverse_decay = key_data[3, key_idx]
+                    current_state = state[key_idx, tile_value_local]
+                    y_value = current_state - key_value * z_value
+                    x_value = y_value + key_value * erased_value
+                    previous_state = x_value * inverse_decay
+                    state[key_idx, tile_value_local] = previous_state
+                    ds_value = dstate[key_iter]
+
+                    dk_direct_part = _four_lane_sum(ds_value * update_value)
+                    dr_part = _four_lane_sum(-x_value * du_value)
+                    dx_value = ds_value - r_value * du_value
+                    da_part = _four_lane_sum(dx_value * previous_state)
+
+                    if value_local == 0:
+                        tile_partial[1, warp, key_idx] = dk_direct_part
+                        tile_partial[2, warp, key_idx] = dr_part
+                        tile_partial[3, warp, key_idx] = da_part
+                    dstate[key_iter] = decay * dx_value
+
+                # Merge the per-warp V4 contributions into this CTA's V8/V16
+                # partial.  A second barrier prevents the next token from
+                # overwriting shared slots while the leading threads read.
+                cute.arch.sync_threads()
+                for reduce_iter in cutlass.range_constexpr(_DIM // _LONG_THREADS):
+                    key_idx = tidx + _LONG_THREADS * reduce_iter
+                    dq_total = cutlass.Float32(0.0)
+                    dk_direct_total = cutlass.Float32(0.0)
+                    dr_total = cutlass.Float32(0.0)
+                    da_total = cutlass.Float32(0.0)
+                    for source_warp in cutlass.range_constexpr(_LONG_WARPS):
+                        dq_total += tile_partial[0, source_warp, key_idx]
+                        dk_direct_total += tile_partial[1, source_warp, key_idx]
+                        dr_total += tile_partial[2, source_warp, key_idx]
+                        da_total += tile_partial[3, source_warp, key_idx]
+                    partial[0, batch, token, head, value_tile, key_idx] = dq_total
+                    partial[1, batch, token, head, value_tile, key_idx] = dk_direct_total
+                    partial[2, batch, token, head, value_tile, key_idx] = dr_total
+                    partial[3, batch, token, head, value_tile, key_idx] = da_total
+                cute.arch.sync_threads()
+
+    for key_iter in cutlass.range(_LONG_KEYS_PER_LANE, unroll_full=True):
+        key_idx = key_group + 8 * key_iter
+        d_initial_state[batch, head, key_idx, value_idx] = dstate[key_iter]
+
+
+@cute.kernel
+def _reduce_long_partials_kernel(
+    k: cute.Tensor,
+    g: cute.Tensor,
+    beta: cute.Tensor,
+    partial: cute.Tensor,
+    dq: cute.Tensor,
+    dk: cute.Tensor,
+    dg: cute.Tensor,
+    dbeta: cute.Tensor,
+):
+    tidx, _, _ = cute.arch.thread_idx()
+    block, _, _ = cute.arch.block_idx()
+    head = block % k.shape[2]
+    batch_token = block // k.shape[2]
+    token = batch_token % k.shape[1]
+    batch = batch_token // k.shape[1]
+    key_idx = tidx
+
+    dq_total = cutlass.Float32(0.0)
+    dk_direct_total = cutlass.Float32(0.0)
+    dr_total = cutlass.Float32(0.0)
+    da_total = cutlass.Float32(0.0)
+    for value_tile in cutlass.range_constexpr(_LONG_VALUE_TILES):
+        dq_total += partial[0, batch, token, head, value_tile, key_idx]
+        dk_direct_total += partial[1, batch, token, head, value_tile, key_idx]
+        dr_total += partial[2, batch, token, head, value_tile, key_idx]
+        da_total += partial[3, batch, token, head, value_tile, key_idx]
+
+    key_value = k[batch, token, head, key_idx].to(cutlass.Float32)
+    beta_value = beta[batch, token, head, key_idx].to(cutlass.Float32)
+    decay = cute.math.exp(g[batch, token, head, key_idx].to(cutlass.Float32), fastmath=False)
+    dq[batch, token, head, key_idx] = dq_total.to(dq.element_type)
+    dk[batch, token, head, key_idx] = (dk_direct_total + beta_value * dr_total).to(dk.element_type)
+    dbeta[batch, token, head, key_idx] = (key_value * dr_total).to(dbeta.element_type)
+    dg[batch, token, head, key_idx] = (decay * da_total).to(dg.element_type)
 
 
 @cute.kernel
@@ -564,6 +847,67 @@ def _launch_chunk_backward_value_tiled(
     )
 
 
+@cute.jit
+def _launch_checkpoint_recompute_backward(
+    q: cute.Tensor,
+    k: cute.Tensor,
+    v: cute.Tensor,
+    g: cute.Tensor,
+    beta: cute.Tensor,
+    w: cute.Tensor,
+    initial_state: cute.Tensor,
+    do: cute.Tensor,
+    d_final_state: cute.Tensor,
+    checkpoints: cute.Tensor,
+    partial: cute.Tensor,
+    dq: cute.Tensor,
+    dk: cute.Tensor,
+    dv: cute.Tensor,
+    dg: cute.Tensor,
+    dbeta: cute.Tensor,
+    dw: cute.Tensor,
+    d_initial_state: cute.Tensor,
+    scale: cutlass.Float32,
+    stream: cuda.CUstream,
+):
+    _checkpoint_recompute_backward_kernel(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state,
+        do,
+        d_final_state,
+        checkpoints,
+        partial,
+        dv,
+        dw,
+        d_initial_state,
+        scale,
+    ).launch(
+        grid=(q.shape[0] * q.shape[2] * _LONG_VALUE_TILES, 1, 1),
+        block=(_LONG_THREADS, 1, 1),
+        smem=_LONG_SMEM_BYTES,
+        stream=stream,
+    )
+    _reduce_long_partials_kernel(
+        k,
+        g,
+        beta,
+        partial,
+        dq,
+        dk,
+        dg,
+        dbeta,
+    ).launch(
+        grid=(q.shape[0] * q.shape[1] * q.shape[2], 1, 1),
+        block=(_DIM, 1, 1),
+        stream=stream,
+    )
+
+
 def _validate_backward_inputs(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -623,6 +967,7 @@ def _chunk_backward_impl(
     do: torch.Tensor,
     d_final_state: torch.Tensor,
     scale: float | None = None,
+    initial_state: torch.Tensor | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -659,6 +1004,88 @@ def _chunk_backward_impl(
     final_state_arg = final_state.detach() if final_state.requires_grad else final_state
     do_arg = do.detach() if do.requires_grad else do
     d_final_state_arg = d_final_state.detach() if d_final_state.requires_grad else d_final_state
+
+    use_checkpoint_path = q.shape[1] > MAX_BACKWARD_TOKENS or (
+        q.shape[1] == MAX_BACKWARD_TOKENS and initial_state is not None
+    )
+    if use_checkpoint_path:
+        initial_state_storage = (
+            torch.zeros_like(final_state) if initial_state is None else initial_state
+        )
+        initial_state_arg = (
+            initial_state_storage.detach()
+            if initial_state_storage.requires_grad
+            else initial_state_storage
+        )
+        n_chunks = math.ceil(q.shape[1] / _CHECKPOINT_CHUNK)
+        checkpoints = torch.empty(
+            (q.shape[0], n_chunks + 1, q.shape[2], _DIM, _DIM),
+            device=q.device,
+            dtype=torch.float32,
+        )
+        partial = torch.empty(
+            (4, q.shape[0], q.shape[1], q.shape[2], _LONG_VALUE_TILES, _DIM),
+            device=q.device,
+            dtype=torch.float32,
+        )
+        compile_arguments = (
+            from_dlpack(q_arg),
+            from_dlpack(k_arg),
+            from_dlpack(v_arg),
+            from_dlpack(g_arg),
+            from_dlpack(beta_arg),
+            from_dlpack(w_arg),
+            from_dlpack(initial_state_arg),
+            from_dlpack(do_arg),
+            from_dlpack(d_final_state_arg),
+            from_dlpack(checkpoints),
+            from_dlpack(partial),
+            from_dlpack(dq),
+            from_dlpack(dk),
+            from_dlpack(dv),
+            from_dlpack(dg),
+            from_dlpack(dbeta),
+            from_dlpack(dw),
+            from_dlpack(d_initial_state),
+            cutlass.Float32(output_scale),
+            stream,
+        )
+        runtime_arguments = (
+            q_arg,
+            k_arg,
+            v_arg,
+            g_arg,
+            beta_arg,
+            w_arg,
+            initial_state_arg,
+            do_arg,
+            d_final_state_arg,
+            checkpoints,
+            partial,
+            dq,
+            dk,
+            dv,
+            dg,
+            dbeta,
+            dw,
+            d_initial_state,
+            output_scale,
+            stream,
+        )
+        cache_key = (q.device.index, q.dtype, g.dtype, tuple(q.shape), tuple(v.shape))
+        compiled = _CHECKPOINT_COMPILED.get(cache_key)
+        if compiled is None:
+            with _COMPILE_LOCK:
+                compiled = _CHECKPOINT_COMPILED.get(cache_key)
+                if compiled is None:
+                    compiled = cute.compile(
+                        _launch_checkpoint_recompute_backward,
+                        *compile_arguments,
+                        options="--enable-tvm-ffi",
+                    )
+                    _CHECKPOINT_COMPILED[cache_key] = compiled
+        compiled(*runtime_arguments)
+        return dq, dk, dv, dg, dbeta, dw, d_initial_state
 
     # A second launch pays for itself once there is more than one token.  Keep
     # the original single-CTA/head path for latency-sensitive recurrent use.
@@ -792,6 +1219,7 @@ def chunk_backward(
     do: torch.Tensor,
     d_final_state: torch.Tensor,
     scale: float | None = None,
+    initial_state: torch.Tensor | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -803,25 +1231,28 @@ def chunk_backward(
 ]:
     """Return ``dq, dk, dv, dg, dbeta, dw, d_initial_state``.
 
-    ``q/k/v/g/beta/w/do`` are contiguous ``[B, T, H, 128]`` FP16 or BF16
-    tensors.  ``final_state`` and ``d_final_state`` are contiguous
+    ``q/k/v/beta/w/do`` are contiguous ``[B, T, H, 128]`` FP16 or BF16
+    tensors; ``g`` may additionally be FP32. ``final_state`` and
+    ``d_final_state`` are contiguous
     ``[B, H, 128, 128]`` FP32 tensors.  The kernel reconstructs all earlier
-    states, so the forward ``initial_state`` is intentionally not an argument.
-
-    This final-state-only implementation supports at most 128 tokens.  A
-    checkpoint-aware long-sequence backward is not implemented in this project;
-    longer inputs raise ``RuntimeError`` rather than returning silently
-    corrupted early-token gradients.
+    states.  For sequences longer than 128 tokens, pass the exact FP32 forward
+    ``initial_state``; ``None`` means the forward recurrence started from zero.
+    Supplying it at exactly 128 tokens also selects the faster checkpoint path.
+    This path recomputes FP32 boundaries from ``initial_state`` and resets to
+    each saved chunk end, avoiding ill-conditioned inversion across the full
+    rounded final state.
     """
 
     global _SINGLE_CUDA_DEVICE
 
     _validate_backward_inputs(q, k, v, g, beta, w, final_state, do, d_final_state)
-    if q.shape[1] > MAX_BACKWARD_TOKENS:
-        raise RuntimeError(
-            f"final-state-only backward supports at most {MAX_BACKWARD_TOKENS} tokens; "
-            "checkpoint-aware long-sequence backward is not implemented"
-        )
+    if initial_state is not None:
+        if initial_state.shape != final_state.shape or initial_state.dtype != torch.float32:
+            raise ValueError("initial_state must be contiguous float32 [B, H, 128, 128]")
+        if not initial_state.is_cuda or not initial_state.is_contiguous():
+            raise ValueError("initial_state must be a contiguous CUDA tensor")
+        if initial_state.device != q.device:
+            raise ValueError("initial_state must be on the same CUDA device as q")
     effective_arch = os.environ.get("CUTE_DSL_ARCH")
     if effective_arch != "sm_120":
         raise RuntimeError(
@@ -847,6 +1278,7 @@ def chunk_backward(
             do,
             d_final_state,
             scale,
+            initial_state,
         )
     with torch.cuda.device(q.device):
         return _chunk_backward_impl(
@@ -860,6 +1292,7 @@ def chunk_backward(
             do,
             d_final_state,
             scale,
+            initial_state,
         )
 
 

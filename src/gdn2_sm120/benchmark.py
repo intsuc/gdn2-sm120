@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import statistics
 import subprocess
 import sys
@@ -44,6 +45,7 @@ class BenchmarkResult:
     official_commit: str | None
     fla_commit: str
     qk_l2_normalized: bool
+    scale: float
     device: str
     torch_version: str
     cuda_runtime: str
@@ -168,7 +170,9 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}[args.dtype]
     inputs = _make_inputs(args.batch, args.time, args.heads, dtype)
     q, k, v, g, beta, w, state = inputs
-    scale = 0.125
+    scale = float(args.scale)
+    if not math.isfinite(scale):
+        raise ValueError("benchmark scale must be finite")
 
     official_chunk = official_token = official_commit = None
     if args.official_repo is not None:
@@ -216,7 +220,7 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
                     use_gate_in_kernel=False,
                 )
 
-    else:
+    elif args.mode in ("chunk-backward", "chunk-training"):
         gradient_generator = torch.Generator(device="cuda").manual_seed(20260825)
         upstream_o = (
             torch.randn(
@@ -238,43 +242,81 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
         )
         cute_differentiable = [tensor.detach().requires_grad_() for tensor in inputs[:6]]
         cute_state = state.detach().requires_grad_()
-        cute_output, cute_final = chunk_gdn2(
-            *cute_differentiable,
-            cute_state,
-            scale=scale,
-            output_final_state=True,
-        )
-        assert cute_final is not None
         cute_grad_inputs = (*cute_differentiable, cute_state)
-
-        def cute_call():
-            return torch.autograd.grad(
-                (cute_output, cute_final),
-                cute_grad_inputs,
-                (upstream_o, upstream_state),
-                retain_graph=True,
+        if args.mode == "chunk-backward":
+            cute_output, cute_final = chunk_gdn2(
+                *cute_differentiable,
+                cute_state,
+                scale=scale,
+                output_final_state=True,
             )
+            assert cute_final is not None
+
+            def cute_call():
+                return torch.autograd.grad(
+                    (cute_output, cute_final),
+                    cute_grad_inputs,
+                    (upstream_o, upstream_state),
+                    retain_graph=True,
+                )
+
+        else:
+
+            def cute_call():
+                cute_output, cute_final = chunk_gdn2(
+                    *cute_differentiable,
+                    cute_state,
+                    scale=scale,
+                    output_final_state=True,
+                )
+                assert cute_final is not None
+                return torch.autograd.grad(
+                    (cute_output, cute_final),
+                    cute_grad_inputs,
+                    (upstream_o, upstream_state),
+                )
 
         if official_chunk is not None:
             differentiable = [tensor.detach().requires_grad_() for tensor in inputs[:6]]
             differentiable_state = state.detach().requires_grad_()
-            official_output, official_final = official_chunk(
-                *differentiable,
-                scale=scale,
-                initial_state=differentiable_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=False,
-                use_gate_in_kernel=False,
-            )
             grad_inputs = (*differentiable, differentiable_state)
-
-            def triton_call():
-                return torch.autograd.grad(
-                    (official_output, official_final),
-                    grad_inputs,
-                    (upstream_o, upstream_state),
-                    retain_graph=True,
+            if args.mode == "chunk-backward":
+                official_output, official_final = official_chunk(
+                    *differentiable,
+                    scale=scale,
+                    initial_state=differentiable_state,
+                    output_final_state=True,
+                    use_qk_l2norm_in_kernel=False,
+                    use_gate_in_kernel=False,
                 )
+
+                def triton_call():
+                    return torch.autograd.grad(
+                        (official_output, official_final),
+                        grad_inputs,
+                        (upstream_o, upstream_state),
+                        retain_graph=True,
+                    )
+
+            else:
+
+                def triton_call():
+                    official_output, official_final = official_chunk(
+                        *differentiable,
+                        scale=scale,
+                        initial_state=differentiable_state,
+                        output_final_state=True,
+                        use_qk_l2norm_in_kernel=False,
+                        use_gate_in_kernel=False,
+                    )
+                    return torch.autograd.grad(
+                        (official_output, official_final),
+                        grad_inputs,
+                        (upstream_o, upstream_state),
+                    )
+
+    else:
+        raise AssertionError(f"unhandled benchmark mode: {args.mode}")
 
     validation_max_abs = None
     if triton_call is not None:
@@ -304,6 +346,7 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
         official_commit=official_commit,
         fla_commit=FLA_COMMIT,
         qk_l2_normalized=True,
+        scale=scale,
         device=torch.cuda.get_device_name(),
         torch_version=str(torch.__version__),
         cuda_runtime=str(torch.version.cuda),
@@ -314,13 +357,19 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("chunk-forward", "chunk-backward", "token-forward"),
+        choices=("chunk-forward", "chunk-backward", "chunk-training", "token-forward"),
         default="chunk-forward",
     )
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--time", type=int, default=16)
     parser.add_argument("--heads", type=int, default=16)
     parser.add_argument("--dtype", choices=("bf16", "fp16"), default="bf16")
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=0.125,
+        help="explicit output scale applied identically to both implementations",
+    )
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=50)
     parser.add_argument(

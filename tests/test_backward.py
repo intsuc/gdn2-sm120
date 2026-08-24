@@ -190,42 +190,89 @@ def test_normalized_key_t128_backward_matches_reference() -> None:
 
 
 @pytest.mark.cuda
+@pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
-@pytest.mark.parametrize("time", [129, 256, 512])
-def test_long_normalized_key_backward_requires_checkpoints(time: int) -> None:
+@pytest.mark.parametrize(
+    ("time", "dtype", "gate_dtype", "zero_initial_state"),
+    [
+        pytest.param(256, torch.float16, torch.float16, False, id="t256-fp16"),
+        pytest.param(256, torch.bfloat16, torch.float32, True, id="t256-bf16-zero"),
+        pytest.param(512, torch.bfloat16, torch.float32, False, id="t512-bf16"),
+    ],
+)
+def test_long_normalized_key_backward_matches_reference(
+    time: int,
+    dtype: torch.dtype,
+    gate_dtype: torch.dtype,
+    zero_initial_state: bool,
+) -> None:
+    """FP32 checkpoints prevent normalized-key reverse-reconstruction drift."""
+
+    generator = torch.Generator(device="cuda").manual_seed(920_000 + time)
     device = torch.device("cuda")
-    dtype = torch.bfloat16
     shape = (1, time, 1, 128)
     state_shape = (1, 1, 128, 128)
-    sequence = torch.zeros(shape, device=device, dtype=dtype)
-    key = torch.zeros_like(sequence)
-    key[..., 0] = 1.0
-    gate = torch.full(shape, -0.015, device=device, dtype=torch.float32)
-    beta = torch.full(shape, 0.5, device=device, dtype=dtype)
-    state = torch.randn(state_shape, device=device, dtype=torch.float32) * 0.03
+    scale = 0.125
+    q = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device=device), dim=-1
+    ).to(dtype)
+    k = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device=device), dim=-1
+    ).to(dtype)
+    base = [
+        q,
+        k,
+        torch.randn(shape, generator=generator, device=device, dtype=dtype) * 0.2,
+        -torch.rand(shape, generator=generator, device=device, dtype=gate_dtype) * 0.03,
+        torch.sigmoid(torch.randn(shape, generator=generator, device=device, dtype=dtype)),
+        torch.sigmoid(torch.randn(shape, generator=generator, device=device, dtype=dtype)),
+    ]
+    initial_state = torch.zeros(state_shape, device=device, dtype=torch.float32)
+    if not zero_initial_state:
+        initial_state.normal_(generator=generator).mul_(0.03)
+    do = torch.randn(shape, generator=generator, device=device, dtype=dtype) * 0.2
+    d_final_state = (
+        torch.randn(state_shape, generator=generator, device=device, dtype=torch.float32) * 0.1
+    )
 
-    with pytest.raises(RuntimeError, match="at most 128 tokens"):
-        chunk_backward(
-            sequence,
-            key,
-            sequence,
-            gate,
-            beta,
-            sequence,
-            state,
-            sequence,
-            state,
-            scale=0.125,
-        )
+    differentiable = [tensor.detach().requires_grad_() for tensor in base]
+    differentiable_initial_state = initial_state.detach().requires_grad_()
+    output, final_state = chunkwise_forward_reference(
+        *differentiable,
+        differentiable_initial_state,
+        scale=scale,
+        chunk_size=64,
+    )
+    assert final_state is not None
+    expected = torch.autograd.grad(
+        (output, final_state),
+        (*differentiable, differentiable_initial_state),
+        (do, d_final_state),
+    )
+    actual = chunk_backward(
+        *base,
+        final_state.detach().contiguous(),
+        do,
+        d_final_state,
+        scale,
+        initial_state=None if zero_initial_state else initial_state,
+    )
+    torch.cuda.synchronize()
+
+    sequence_atol = 2e-3 if dtype == torch.float16 else 1.5e-2
+    for gradient, reference in zip(actual[:-1], expected[:-1], strict=True):
+        torch.testing.assert_close(gradient, reference, atol=sequence_atol, rtol=0.02)
+    torch.testing.assert_close(actual[-1], expected[-1], atol=2e-5, rtol=2e-4)
 
 
 @pytest.mark.cuda
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
-def test_value_tiled_backward_uses_current_stream() -> None:
-    """The multi-token main and reduction launches must use the caller's stream."""
+@pytest.mark.parametrize("time", [2, 129], ids=["value-tiled", "long-checkpoint-tail"])
+def test_multilaunch_backward_uses_current_stream(time: int) -> None:
+    """Both main/reduction launch pairs must use the caller's CUDA stream."""
 
     device = torch.device("cuda")
-    batch, time, heads, dim = 1, 2, 1, 128
+    batch, heads, dim = 1, 1, 128
     shape = (batch, time, heads, dim)
     sequence = torch.zeros(shape, device=device, dtype=torch.bfloat16)
     gate = torch.zeros(shape, device=device, dtype=torch.float32)
@@ -252,9 +299,10 @@ def test_value_tiled_backward_uses_current_stream() -> None:
             do,
             d_final_state,
             scale,
+            initial_state=state if time > 128 else None,
         )
-    # Synchronize only the caller-selected stream: this catches either tiled
-    # launch accidentally escaping to the default stream.
+    # Synchronize only the caller-selected stream: this catches any main or
+    # reduction launch accidentally escaping to the default stream.
     stream.synchronize()
 
     torch.testing.assert_close(actual[0], expected_dq, atol=2e-3, rtol=2e-2)

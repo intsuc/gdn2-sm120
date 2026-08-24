@@ -6,11 +6,15 @@ import math
 
 import torch
 
-from .backward import MAX_BACKWARD_TOKENS, chunk_backward
-from .chunk import chunk_forward
+from .backward import chunk_backward
+from .backward_parallel import WYBoundaryAux, parallel_chunk_vjp, wy_boundary_dstate
+from .backward_wy import compact_wy_chunk_vjp_cute
+from .chunk import ChunkForwardAux, chunk_forward
 from .recurrent import token_forward
 
 _DIM = 128
+_PARALLEL_BACKWARD_MIN_TOKENS = 64
+_COMPACT_WY_BACKWARD_MIN_TOKENS = 128
 
 
 class _ChunkGDN2(torch.autograd.Function):
@@ -27,8 +31,10 @@ class _ChunkGDN2(torch.autograd.Function):
         w: torch.Tensor,
         initial_state: torch.Tensor | None,
         scale: float,
+        prepare_backward: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        output, final_state = chunk_forward(
+        use_parallel_backward = q.shape[1] >= _PARALLEL_BACKWARD_MIN_TOKENS and prepare_backward
+        forward_result = chunk_forward(
             q,
             k,
             v,
@@ -37,10 +43,31 @@ class _ChunkGDN2(torch.autograd.Function):
             w,
             initial_state,
             scale=scale,
+            return_aux=use_parallel_backward,
         )
+        if use_parallel_backward:
+            output, final_state, aux = forward_result
+            ctx.save_for_backward(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                w,
+                aux.y,
+                aux.u,
+                aux.q_gamma,
+                aux.k_tail,
+                aux.decay_end,
+                aux.aqk,
+                aux.state_boundaries,
+            )
+        else:
+            output, final_state = forward_result
+            ctx.save_for_backward(q, k, v, g, beta, w, final_state)
         ctx.set_materialize_grads(False)
-        ctx.save_for_backward(q, k, v, g, beta, w, final_state)
         ctx.has_initial_state = initial_state is not None
+        ctx.use_parallel_backward = use_parallel_backward
         ctx.scale = scale
         return output, final_state
 
@@ -59,33 +86,91 @@ class _ChunkGDN2(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor | None,
         None,
+        None,
     ]:
-        q, k, v, g, beta, w, final_state = ctx.saved_tensors
+        q, k, v, g, beta, w, *saved = ctx.saved_tensors
         if d_output is None:
             d_output = torch.zeros_like(v)
         elif not d_output.is_contiguous():
             d_output = d_output.contiguous()
-        if d_final_state is None:
-            d_final_state = torch.zeros_like(final_state)
-        elif not d_final_state.is_contiguous():
-            d_final_state = d_final_state.contiguous()
-
-        gradients = chunk_backward(
-            q,
-            k,
-            v,
-            g,
-            beta,
-            w,
-            final_state,
-            d_output,
-            d_final_state,
-            ctx.scale,
-        )
+        if ctx.use_parallel_backward:
+            y, u, q_gamma, k_tail, decay_end, aqk, state_boundaries = saved
+            if d_final_state is None:
+                d_final_state = torch.zeros_like(state_boundaries[:, 0])
+            elif not d_final_state.is_contiguous():
+                d_final_state = d_final_state.contiguous()
+            boundary_aux = WYBoundaryAux(y, q_gamma, k_tail, decay_end, aqk)
+            if q.shape[1] >= _COMPACT_WY_BACKWARD_MIN_TOKENS:
+                dstate_boundaries, d_residual = wy_boundary_dstate(
+                    boundary_aux,
+                    d_output,
+                    d_final_state,
+                    return_d_residual=True,
+                )
+                forward_aux = ChunkForwardAux(
+                    y,
+                    u,
+                    q_gamma,
+                    k_tail,
+                    decay_end,
+                    aqk,
+                    state_boundaries,
+                )
+                gradients = compact_wy_chunk_vjp_cute(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    w,
+                    state_boundaries,
+                    dstate_boundaries,
+                    forward_aux,
+                    d_output,
+                    scale=ctx.scale,
+                    precomputed_d_residual=d_residual,
+                )
+            else:
+                dstate_boundaries = wy_boundary_dstate(
+                    boundary_aux,
+                    d_output,
+                    d_final_state,
+                )
+                gradients = parallel_chunk_vjp(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    w,
+                    state_boundaries,
+                    dstate_boundaries,
+                    d_output,
+                    scale=ctx.scale,
+                )
+        else:
+            (final_state,) = saved
+            if d_final_state is None:
+                d_final_state = torch.zeros_like(final_state)
+            elif not d_final_state.is_contiguous():
+                d_final_state = d_final_state.contiguous()
+            gradients = chunk_backward(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                w,
+                final_state,
+                d_output,
+                d_final_state,
+                ctx.scale,
+            )
         *sequence_gradients, d_initial_state = gradients
         return (
             *sequence_gradients,
             d_initial_state if ctx.has_initial_state else None,
+            None,
             None,
         )
 
@@ -114,20 +199,10 @@ def chunk_gdn2(
     if not math.isfinite(output_scale):
         raise ValueError("scale must be finite")
     differentiable_inputs = (q, k, v, g, beta, w, initial_state)
-    needs_backward = torch.is_grad_enabled() and any(
+    prepare_backward = torch.is_grad_enabled() and any(
         isinstance(tensor, torch.Tensor) and tensor.requires_grad
         for tensor in differentiable_inputs
     )
-    if (
-        needs_backward
-        and isinstance(q, torch.Tensor)
-        and q.ndim == 4
-        and q.shape[1] > MAX_BACKWARD_TOKENS
-    ):
-        raise NotImplementedError(
-            f"the native backward supports at most {MAX_BACKWARD_TOKENS} tokens; "
-            "checkpoint/WY long-sequence backward is not implemented"
-        )
     output, final_state = _ChunkGDN2.apply(
         q,
         k,
@@ -137,6 +212,7 @@ def chunk_gdn2(
         w,
         initial_state,
         output_scale,
+        prepare_backward,
     )
     return output, final_state if output_final_state else None
 

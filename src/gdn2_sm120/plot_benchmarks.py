@@ -12,7 +12,7 @@ from typing import Any
 MODES = ("chunk-forward", "chunk-backward", "token-forward")
 MODE_TITLES = {
     "chunk-forward": "Chunk forward",
-    "chunk-backward": "Chunk backward (T ≤ 128)",
+    "chunk-backward": "Chunk backward",
     "token-forward": "Token forward",
 }
 
@@ -35,7 +35,9 @@ class BenchmarkPoint:
     stored_speedup: float
     validation_max_abs: float
     official_commit: str
+    fla_commit: str
     qk_l2_normalized: bool
+    scale: float
     device: str
     torch_version: str
     cuda_runtime: str
@@ -59,7 +61,9 @@ class BenchmarkSuite:
     device: str
     dtype: str
     official_commit: str
+    fla_commit: str
     qk_l2_normalized: bool
+    scale: float
     torch_version: str
     cuda_runtime: str
 
@@ -142,7 +146,9 @@ def _parse_point(record: object, origin: str) -> BenchmarkPoint:
         stored_speedup=stored_speedup,
         validation_max_abs=validation,
         official_commit=_nonempty_string(item.get("official_commit"), "official_commit", origin),
+        fla_commit=_nonempty_string(item.get("fla_commit"), "fla_commit", origin),
         qk_l2_normalized=normalized,
+        scale=_finite_number(item.get("scale"), "scale", origin, positive=False),
         device=_nonempty_string(item.get("device"), "device", origin),
         torch_version=_nonempty_string(item.get("torch_version"), "torch_version", origin),
         cuda_runtime=_nonempty_string(item.get("cuda_runtime"), "cuda_runtime", origin),
@@ -154,7 +160,7 @@ def _records(payload: object, origin: str) -> list[object]:
         return payload
     if isinstance(payload, dict) and "results" in payload:
         version = payload.get("schema_version")
-        if version != 1:
+        if version != 2:
             raise ValueError(f"{origin}: unsupported schema_version {version!r}")
         results = payload["results"]
         if not isinstance(results, list):
@@ -217,7 +223,9 @@ def load_benchmarks(paths: list[Path]) -> BenchmarkSuite:
         device=str(_uniform(points, "device")),
         dtype=str(_uniform(points, "dtype")),
         official_commit=str(_uniform(points, "official_commit")),
+        fla_commit=str(_uniform(points, "fla_commit")),
         qk_l2_normalized=bool(_uniform(points, "qk_l2_normalized")),
+        scale=float(_uniform(points, "scale")),
         torch_version=str(_uniform(points, "torch_version")),
         cuda_runtime=str(_uniform(points, "cuda_runtime")),
     )
@@ -406,7 +414,8 @@ def render_benchmarks(
     figure.text(
         0.04,
         0.925,
-        f"{suite.dtype.upper()} · K=V=128 · {normalized} · lower is better · "
+        f"{suite.dtype.upper()} · K=V=128 · scale={suite.scale:g} · {normalized} · "
+        "lower is better · "
         "labels are official/CuTe speedup",
         ha="left",
         fontsize=10,

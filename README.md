@@ -6,9 +6,9 @@ measured on an NVIDIA RTX PRO 6000 Blackwell Workstation Edition.
 
 The repository contains three working CUDA paths:
 
-- BT=16 WY chunkwise forward for training/prefill;
-- a value-tiled training backward (up to 128 tokens) with a fused
-  single-token specialization;
+- BT=16 compact-WY chunkwise forward with SM120 warp MMA for training/prefill;
+- a checkpointed training backward that dispatches between short recurrence,
+  chunk-parallel recurrence, and compact-WY warp-MMA VJPs;
 - a register-resident token/recurrent forward for decoding.
 
 All three are written in CuTe DSL, compile specifically for `sm_120`, use the
@@ -40,15 +40,15 @@ benchmark and production warm paths reuse an in-process compiled executor.
 
 ## API
 
-The optimized specialization accepts contiguous sequence tensors in
-`[batch, time, heads, 128]` layout. Q/K/V/erase/write tensors use BF16 or FP16,
-log-decay `g` may use FP32, and state tensors use FP32
-`[batch, heads, 128, 128]`.
+The optimized specialization accepts contiguous, 16-byte-aligned tensors.
+Sequence tensors use `[batch, time, heads, 128]` layout. Q/K/V/erase/write
+tensors use BF16 or FP16, log-decay `g` may use FP32, and state tensors use FP32
+`[batch, heads, 128, 128]`. The output scale defaults to `1/sqrt(128)`.
 
 ```python
 from gdn2_sm120 import chunk_gdn2, recurrent_gdn2
 
-# Training up to 128 tokens: backward() dispatches to native CuTe.
+# Training: backward() selects the native CuTe schedule by sequence length.
 output, final_state = chunk_gdn2(
     q,
     k,
@@ -57,14 +57,13 @@ output, final_state = chunk_gdn2(
     beta,
     w,
     initial_state,
-    scale=0.125,
     output_final_state=True,
 )
 loss = output.float().square().mean() + final_state.square().mean()
 loss.backward()
 
 # Decoding or short recurrent evaluation: forward-only.
-output, final_state = recurrent_gdn2(q, k, v, g, beta, w, initial_state, scale=0.125)
+output, final_state = recurrent_gdn2(q, k, v, g, beta, w, initial_state)
 ```
 
 The primitive expects already-activated erase/write gates and log-decay.
@@ -73,10 +72,11 @@ variable-length sequences, and fused gate activation are not yet part of this
 first specialization. Unsupported devices and shapes fail explicitly; there
 is no silent fallback.
 
-The current final-state-only backward is deliberately capped at 128 tokens.
-Longer training needs forward checkpoints or a full WY backward; it raises
-instead of returning numerically unstable early-token gradients. Forward-only
-`chunk_forward` is not subject to this cap.
+For gradient-enabled calls of 64 tokens or more, the forward saves exact FP32
+states at every BT=16 boundary. Backward uses those checkpoints instead of
+inverting the complete sequence from a rounded final state. At 128 tokens and
+above it dispatches to a compact-WY tensor-core VJP; partial final chunks are
+supported. Forward-only calls do not allocate these training checkpoints.
 
 ## Benchmark against the official Triton implementation
 
@@ -94,6 +94,9 @@ uv run gdn2-sm120-bench \
   --official-repo /tmp/GatedDeltaNet-2
 uv run gdn2-sm120-bench \
   --mode chunk-backward --batch 1 --time 16 --heads 16 --dtype bf16 \
+  --official-repo /tmp/GatedDeltaNet-2
+uv run gdn2-sm120-bench \
+  --mode chunk-training --batch 1 --time 256 --heads 16 --dtype bf16 \
   --official-repo /tmp/GatedDeltaNet-2
 uv run gdn2-sm120-bench \
   --mode token-forward --batch 1 --time 1 --heads 32 --dtype bf16 \
@@ -122,9 +125,11 @@ Representative BF16 medians on the target workstation are:
 
 | Path | Shape | CuTe SM120 | Official Triton | Speedup |
 |---|---:|---:|---:|---:|
-| chunk forward | B1 T16 H16 | 43.5 us | 189.7 us | **4.36x** |
-| chunk backward | B1 T16 H16 | 112.1 us | 277.1 us | **2.47x** |
-| token forward | B1 T1 H32 | 21.0 us | 25.2 us | **1.20x** |
+| chunk forward | B1 T16 H16 | 36.3 us | 180.4 us | **4.97x** |
+| chunk forward | B1 T512 H16 | 110.9 us | 186.0 us | **1.68x** |
+| chunk backward | B1 T16 H16 | 111.9 us | 274.3 us | **2.45x** |
+| chunk backward | B1 T256 H16 | 207.0 us | 276.7 us | **1.34x** |
+| token forward | B1 T1 H32 | 21.0 us | 25.8 us | **1.23x** |
 
 ## Why FROST is not copied directly
 
@@ -132,8 +137,9 @@ The cuDNN Frontend FROST GDN2 kernel is an important scheduling reference, but
 its current prefill design uses 16 warps, about 205 KiB of shared memory,
 Tensor Memory, and `tcgen05` instructions for the SM100/SM103 family. SM120 is
 a distinct Blackwell family: the RTX PRO 6000 path instead uses register
-accumulators, warp shuffles, and value-dimension partitioning. The isolated
-dense products leave a clear path to SM120 warp MMA in a later specialization.
+accumulators, warp shuffles, value/key partitioning, and
+`MmaF16BF16Op` warp MMA. The forward state scan and the long-sequence backward
+therefore use a schedule designed for SM120 rather than a direct FROST port.
 
 The implementation is independently derived from the paper's equations. No
 source from the official GDN2 repository (NVIDIA Source Code License-NC) is
@@ -146,10 +152,13 @@ This is an alpha, shape-specialized kernel project rather than a drop-in
 replacement for every official option. The primary production shape
 `K=V=128` is implemented and numerically checked in BF16/FP16, including FP32
 log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
-and non-default CUDA streams. Chunk forward remains faster through T=256 in
-the measured B1/H16 sweep, but crosses below the official implementation at
-T=512. Backward crosses between T=64 and T=128 and is correctness-capped at
-T=128. Long-sequence WY/checkpoint backward and additional head dimensions
-remain optimization work.
+and non-default CUDA streams. In the measured B1/H16 sweep, chunk forward is
+faster through T=512 and reaches near parity at T=1024; backward-only is faster
+through T=256. At T=512, backward-only is slower, while the measured combined
+forward+backward call remains 1.25x faster because the forward path is much
+faster. The checkpointed path trades memory for speed: its T512 measured peak
+allocation delta is about 132 MiB versus 70 MiB for the official path.
+Additional dimensions, packed sequences, and reducing the T512 backward
+workspace/launch count remain optimization work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

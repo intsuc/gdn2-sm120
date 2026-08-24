@@ -30,21 +30,23 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 1. one CTA per `(batch, chunk, head)` accumulates log-decay, forms asymmetric
    decay-normalized key/erase/query factors, builds the causal token products,
    and solves the unit-lower-triangular WY system;
-2. CTAs partition the value dimension and walk the chunk boundaries in order,
-   keeping their state fragments in registers while producing output and the
-   final FP32 state. Four warps share a CTA and each warp owns one value
-   column, exposing 32 CTAs per `(batch, head)` on the 188-SM target GPU.
+2. value CTAs walk chunk boundaries in a runtime loop. Eight warps split K into
+   16-row fragments, keep a `16 x Vtile` FP32 state per warp in registers, and
+   evaluate the dense products with `m16n8k16` warp MMA;
+3. warp-local FP32 results are reduced through shared memory. The long V16
+   schedule double-buffers Y/Q staging to remove two barriers per chunk, while
+   T<512 uses V8 to expose more CTAs.
 
-FP32 WY auxiliaries make the current version a strong numerical baseline and
-avoid the larger final-state error observed from low-precision auxiliaries.
-The chunk size differs from the official Triton path's C=64 because the smaller
-SM120 schedule exposes more CTAs and stays below the device's shared-memory
-limit.
+Normal forward-only calls store compact FP16/BF16 WY auxiliaries. A
+gradient-enabled call that selects the checkpointed backward asks the same
+kernel for FP32 auxiliaries and exact FP32 state boundaries. The chunk size
+differs from the official Triton path's C=64 because BT=16 exposes more CTAs
+and stays below the SM120 shared-memory limit.
 
 ## Backward
 
-The backward receives the forward final state and algebraically reconstructs
-previous states in reverse with a Sherman-Morrison inverse:
+The short backward receives the forward final state and algebraically
+reconstructs previous states in reverse with a Sherman-Morrison inverse:
 
 ```text
 y = S - outer(k, z)
@@ -53,12 +55,24 @@ X = y + outer(k, c)
 S_previous = Diag(exp(-g)) X
 ```
 
-For multiple tokens, one CTA owns a four-column value tile for each
-`(batch, head)`. These CTAs emit FP32 partials for K-shaped gradients, followed
-by a reduction kernel. A single-token launch uses a fused eight-warp CTA to
-avoid global partials. This is the VJP for the chunk forward API, although its
-present state reconstruction is token-sequential rather than the paper's full
-WY backward decomposition.
+This remains the lowest-overhead path below T=64. At T=64 and above, forward
+saves every FP32 BT=16 boundary. A compact-WY boundary scan computes both the
+reverse state boundaries and
+
+```text
+dR = K_tail dS_next + A_qk.T dO
+```
+
+using a K-split eight-warp MMA schedule. T=64 through T=127 use independent
+chunk-local token VJPs, whose inverse reconstruction is reset from an exact
+boundary after at most 16 tokens.
+
+At T>=128, the parameter VJP uses the full compact-WY graph. For each chunk it
+forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`, `dK_bar`, and the
+reverse cumulative gate gradient through 18 ordered CuTe launches. The large
+`16x128` and `16x16` products use warp MMA; the triangular transpose solve and
+gate chain remain FP32. The boundary scan stores `dR`, avoiding two duplicate
+matrix products in this stage.
 
 The inverse requires `1 - (beta * k).T @ k` to remain nonzero. With normalized
 keys and erase gates below one this is the usual delta-rule operating region.
@@ -66,13 +80,22 @@ The wrapper rejects unsupported shapes and devices, but it does not add a
 per-token singularity check; maintaining this condition is the caller's
 responsibility.
 
-Reverse reconstruction cannot recover information lost when the forward state
-was rounded to FP32 indefinitely. Normalized-key testing stays accurate through
-T=128, while errors grow sharply by T=512. The API therefore exposes
-`MAX_BACKWARD_TOKENS = 128` and rejects longer sequences. The multi-token
-partial workspace is 64 KiB per token/head. A stable long-sequence path must
-save FP32 chunk-boundary checkpoints during forward and recompute inside each
-chunk, or implement the paper's complete WY backward.
+Reverse reconstruction cannot recover information lost when a complete long
+sequence is inverted from one rounded final state. Exact boundary checkpoints
+remove that instability and the public autograd path no longer has a sequence
+length cap. Tensor-core operands, including FP32 auxiliaries, are narrowed to
+the input dtype in shared memory, so the long VJP is a controlled
+low-precision approximation rather than a bit-exact FP32 VJP. Tests through
+T=512 require relative L2 error below 1% and maximum absolute error below
+`5e-3`; observed maxima are about 0.5% and `3.91e-3` against the official
+implementation.
+
+For B1/T512/H16, the compact-WY stage uses about 24 MiB of lifetime-colored
+sequence workspace plus 1.5 MiB of square workspace. Including saved
+boundaries, auxiliaries, reverse boundaries, and outputs, the measured complete
+call peaks about 132 MiB above its input baseline, versus 70 MiB for the
+official path. Reducing that memory ratio and fusing the 18 stages are the next
+backward targets.
 
 ## Token forward
 
@@ -97,9 +120,8 @@ part of SM120. NVIDIA's Blackwell GeForce CuTe example instead builds
 
 Accordingly, this project borrows the algorithmic decomposition and pipeline
 ideas from FROST, but not its binary schedule. The SM120 implementation uses
-register-resident state partitions, warp reductions, and bounded shared
-storage. Its dense chunk products are isolated so a future specialization can
-replace them with the SM120 warp MMA pattern used by NVIDIA's example.
+register-resident state partitions, warp reductions, bounded shared storage,
+and the `MmaF16BF16Op` warp-MMA pattern used by NVIDIA's SM120 example.
 
 ## Compilation and stream semantics
 
@@ -113,11 +135,10 @@ Compilation and launch occur in the input tensor's CUDA device context.
 The cache is process-local. The first invocation includes compilation and is
 not representative of steady-state latency.
 
-Chunk-forward time/chunk counts are currently compile-time specializations and
-the inter-chunk recurrence is sequential. This is excellent for short chunks,
-but JIT code size and latency grow with sequence length; the measured forward
-crossover is between T=256 and T=512. A long-sequence schedule needs a runtime
-chunk loop plus less redundant state-factor traffic.
+Chunk-forward tensor layouts and preparation are shape-specialized, while the
+full-chunk inter-state scan uses a runtime chunk loop. The state dependency is
+still sequential across chunks, but K-split MMA, V16 reuse, and double-buffered
+staging move the measured forward crossover to between T=512 and T=1024.
 
 ## Primary references
 

@@ -38,7 +38,9 @@ def _record(
         "speedup": triton_us / cute_us,
         "validation_max_abs": 0.001,
         "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
+        "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
         "qk_l2_normalized": True,
+        "scale": 0.125,
         "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
         "torch_version": "2.13.0+cu130",
         "cuda_runtime": "13.0",
@@ -46,7 +48,7 @@ def _record(
 
 
 def _write_suite(path: Path, results: list[dict[str, object]]) -> None:
-    payload = {"schema_version": 1, "results": results}
+    payload = {"schema_version": 2, "results": results}
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -116,6 +118,12 @@ def test_rejects_mixed_environment(tmp_path: Path) -> None:
     _write_suite(source, [first, second])
 
     with pytest.raises(ValueError, match="mix device"):
+        load_benchmarks([source])
+
+    second = _record("chunk-backward", 16)
+    second["scale"] = 0.25
+    _write_suite(source, [first, second])
+    with pytest.raises(ValueError, match="mix scale"):
         load_benchmarks([source])
 
 
