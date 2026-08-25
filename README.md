@@ -152,7 +152,7 @@ uv run gdn2-sm120-bench \
   --mode chunk-training --batch 1 --time 256 --heads 16 --dtype bf16 \
   --official-repo /tmp/GatedDeltaNet-2
 uv run gdn2-sm120-bench \
-  --mode token-forward --batch 1 --time 1 --heads 32 --dtype bf16 \
+  --mode token-forward --batch 1 --time 1 --heads 16 --dtype bf16 \
   --official-repo /tmp/GatedDeltaNet-2
 ```
 
@@ -203,8 +203,12 @@ Representative BF16 medians on the target workstation are:
 | chunk backward | B2 T32768 H16 | 22679.8 us | 22951.8 us | **1.01x** |
 | chunk backward | B4 T256 H16 | 271.4 us | 392.1 us | **1.44x** |
 | chunk backward | B4 T16384 H16 | 21906.1 us | 22145.8 us | **1.01x** |
-| token forward | B1 T1 H32 | 13.3 us | 25.4 us | **1.91x** |
-| token forward | B1 T128 H32 | 84.3 us | 120.2 us | **1.43x** |
+| token forward | B1 T1 H16 | 13.5 us | 26.0 us | **1.93x** |
+| token forward | B1 T128 H16 | 84.5 us | 119.3 us | **1.41x** |
+| token forward | B2 T1 H16 | 13.5 us | 25.7 us | **1.90x** |
+| token forward | B2 T128 H16 | 84.5 us | 119.3 us | **1.41x** |
+| token forward | B4 T1 H16 | 16.0 us | 24.8 us | **1.55x** |
+| token forward | B4 T128 H16 | 115.2 us | 132.5 us | **1.15x** |
 
 ## Why FROST is not copied directly
 
@@ -250,12 +254,12 @@ B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at every sampled length through T=32768. Chunk backward remains faster for all
 B1 and B2 points and all 10 measured B4 points through T=16384. B4/T32768
 backward is not benchmarked because one saved state-boundary tensor exceeds
-CuTe's 4-GiB per-launch byte-address range. The fixed B1/H32 token sweep is
-1.91x faster at T=1 and 1.43x faster at T=128. The checkpointed path trades
-memory for speed: compact BF16 boundaries halve checkpoint bytes relative to
-FP32, but the CuTe path still retains both boundary sets and compact-WY
-workspace and therefore uses more memory than the official path. Additional
-dimensions, packed sequences, and further reducing checkpoint memory remain
-optimization work.
+CuTe's 4-GiB per-launch byte-address range. Token forward is measured with the
+same fixed H16 and B1/B2/B4 batch matrix and remains faster at all 24 points
+through T=128. The checkpointed path trades memory for speed: compact BF16
+boundaries halve checkpoint bytes relative to FP32, but the CuTe path still
+retains both boundary sets and compact-WY workspace and therefore uses more
+memory than the official path. Additional dimensions, packed sequences, and
+further reducing checkpoint memory remain optimization work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

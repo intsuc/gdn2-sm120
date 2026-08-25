@@ -64,7 +64,7 @@ def _three_mode_suite(path: Path) -> None:
     _write_suite(
         path,
         [
-            _record("token-forward", 1, heads=32, cute_us=21.0, triton_us=25.2),
+            _record("token-forward", 1, cute_us=21.0, triton_us=25.2),
             _record("chunk-backward", 16, cute_us=112.0, triton_us=277.0),
             _record("chunk-backward", 16384, cute_us=5810.6, triton_us=6353.5),
             _record("chunk-forward", 64, cute_us=64.0, triton_us=185.0),
@@ -81,6 +81,20 @@ def _mixed_batch_chunk_records(mode: str = "chunk-forward") -> list[dict[str, ob
         _record(mode, 128, batch=2, cute_us=110.0, triton_us=99.0),
         _record(mode, 64, batch=4, cute_us=150.0, triton_us=165.0),
         _record(mode, 256, batch=4, cute_us=210.0, triton_us=252.0),
+    ]
+
+
+def _mixed_batch_token_records() -> list[dict[str, object]]:
+    return [
+        _record(
+            "token-forward",
+            time,
+            batch=batch,
+            cute_us=18.0 + 7.0 * batch + 0.35 * time,
+            triton_us=22.0 + 8.5 * batch + 0.42 * time,
+        )
+        for batch in (1, 2, 4)
+        for time in (1, 2, 4, 8, 16, 32, 64, 128)
     ]
 
 
@@ -120,16 +134,18 @@ def test_loads_same_chunk_times_for_distinct_batches(tmp_path: Path) -> None:
     }
 
 
-def test_tracked_chunk_sweeps_cover_all_published_batches_and_lengths() -> None:
+def test_tracked_sweeps_cover_all_published_batches_and_lengths() -> None:
     source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
     points = load_benchmarks([source]).points
-    times = (16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
-    complete = {(batch, time, 16) for batch in (1, 2, 4) for time in times}
+    chunk_times = (16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+    complete_chunks = {(batch, time, 16) for batch in (1, 2, 4) for time in chunk_times}
+    token_times = (1, 2, 4, 8, 16, 32, 64, 128)
     expected_by_mode = {
-        "chunk-forward": complete,
+        "chunk-forward": complete_chunks,
         # B4/T32768 backward exceeds the CuTe per-launch 4-GiB byte-address
         # range for one saved state-boundary tensor and is intentionally absent.
-        "chunk-backward": complete - {(4, 32768, 16)},
+        "chunk-backward": complete_chunks - {(4, 32768, 16)},
+        "token-forward": {(batch, time, 16) for batch in (1, 2, 4) for time in token_times},
     }
 
     for mode, expected in expected_by_mode.items():
@@ -298,7 +314,7 @@ def test_renders_light_and_dark_pngs(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("theme", ("light", "dark"))
-def test_fixed_shape_token_sweep_uses_log2_t_lines(
+def test_multi_batch_token_sweeps_use_chunk_style_series_and_speedup_rows(
     tmp_path: Path,
     theme: str,
 ) -> None:
@@ -306,19 +322,7 @@ def test_fixed_shape_token_sweep_uses_log2_t_lines(
     from matplotlib import pyplot as plt
 
     source = tmp_path / "token-sweep.json"
-    _write_suite(
-        source,
-        [
-            _record(
-                "token-forward",
-                time,
-                heads=32,
-                cute_us=20.0 + time,
-                triton_us=24.0 + time * 1.2,
-            )
-            for time in (1, 2, 4, 8, 16, 32, 64, 128)
-        ],
-    )
+    _write_suite(source, _mixed_batch_token_records())
     points = list(load_benchmarks([source]).points)
     palette = plot_benchmarks._plot_palette(theme)
     figure, axis = plt.subplots()
@@ -326,14 +330,33 @@ def test_fixed_shape_token_sweep_uses_log2_t_lines(
         plot_benchmarks._plot_token_panel(axis, points, palette=palette)
         figure.canvas.draw()
 
-        assert axis.get_gid() == "token-scaling-panel"
-        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · B1/H32"
-        series = [
-            line for line in axis.lines if line.get_label() in {"CuTe SM120", "Official Triton"}
-        ]
-        assert len(series) == 2
-        assert {line.get_color() for line in series} == {palette.cute, palette.triton}
-        assert all(list(line.get_xdata()) == pytest.approx(range(8)) for line in series)
+        trends = [line for line in axis.lines if line.get_gid() == "token-trend"]
+        assert axis.get_gid() == "token-multi-shape-panel"
+        assert axis.get_yscale() == "log"
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · fixed H16"
+        assert len(trends) == 6
+        expected_trends = Counter(
+            (
+                color,
+                plot_benchmarks._BATCH_LINESTYLES[index],
+                tuple(
+                    getattr(point, implementation)
+                    for point in sorted(
+                        (candidate for candidate in points if candidate.batch == batch),
+                        key=lambda point: point.time,
+                    )
+                ),
+            )
+            for index, batch in enumerate((1, 2, 4))
+            for color, implementation in (
+                (palette.cute, "cute_median_us"),
+                (palette.triton, "triton_median_us"),
+            )
+        )
+        actual_trends = Counter(
+            (line.get_color(), line.get_linestyle(), tuple(line.get_ydata())) for line in trends
+        )
+        assert actual_trends == expected_trends
         assert [tick.get_text() for tick in axis.get_xticklabels()] == [
             "1",
             "2",
@@ -344,24 +367,55 @@ def test_fixed_shape_token_sweep_uses_log2_t_lines(
             "64",
             "128",
         ]
-        labels = [text.get_text() for text in axis.texts if text.get_gid() == "token-speedup-label"]
-        assert labels == [plot_benchmarks._speedup_label(point.speedup)[0] for point in points]
-        assert not axis.patches
+        assert [text.get_text() for text in axis.texts if text.get_gid() == "token-rail-key"] == [
+            "B1",
+            "B2",
+            "B4",
+        ]
+        labels = [text for text in axis.texts if text.get_gid() == "token-rail-label"]
+        assert Counter(text.get_text() for text in labels) == Counter(
+            plot_benchmarks._speedup_label(point.speedup, palette)[0] for point in points
+        )
+        assert len(labels) == 24
+        connectors = [line for line in axis.lines if line.get_gid() == "token-pair-connector"]
+        assert len(connectors) == 24
+        midpoints_by_tick: dict[float, list[float]] = {float(x): [] for x in range(8)}
+        for connector in connectors:
+            connector_xs = [float(x) for x in connector.get_xdata()]
+            assert connector_xs[0] < connector_xs[1]
+            midpoint = sum(connector_xs) / 2.0
+            tick = min(midpoints_by_tick, key=lambda true_x: abs(midpoint - true_x))
+            assert abs(midpoint - tick) <= 0.21
+            assert all(abs(x - tick) <= 0.26 for x in connector_xs)
+            midpoints_by_tick[tick].append(midpoint)
+        assert all(
+            len(midpoints) == len({round(midpoint, 8) for midpoint in midpoints}) == 3
+            for midpoints in midpoints_by_tick.values()
+        )
+        assert [patch.get_gid() for patch in axis.patches] == ["token-value-rail"]
+        assert Counter(collection.get_gid() for collection in axis.collections) == Counter(
+            {"token-observation-cute": 3, "token-observation-triton": 3}
+        )
     finally:
         plt.close(figure)
 
 
-def test_mixed_token_shapes_keep_grouped_bar_fallback(tmp_path: Path) -> None:
+def test_single_batch_token_sweep_uses_the_shared_scaling_panel(tmp_path: Path) -> None:
     pytest.importorskip("matplotlib")
     from matplotlib import pyplot as plt
 
-    source = tmp_path / "mixed-token-shapes.json"
+    source = tmp_path / "single-batch-token-sweep.json"
     _write_suite(
         source,
         [
-            _record("token-forward", 1, heads=32, cute_us=21.0, triton_us=25.0),
-            _record("token-forward", 16, heads=16, cute_us=35.0, triton_us=36.0),
-            _record("token-forward", 32, batch=2, heads=16, cute_us=50.0, triton_us=52.0),
+            _record(
+                "token-forward",
+                time,
+                batch=2,
+                cute_us=25.0 + time,
+                triton_us=30.0 + time,
+            )
+            for time in (1, 2, 4, 8)
         ],
     )
     points = list(load_benchmarks([source]).points)
@@ -370,14 +424,17 @@ def test_mixed_token_shapes_keep_grouped_bar_fallback(tmp_path: Path) -> None:
         plot_benchmarks._plot_token_panel(axis, points)
         figure.canvas.draw()
 
-        assert axis.get_gid() != "token-scaling-panel"
-        assert axis.get_xlabel() == "Measured shape (mixed B/H; not a scaling line)"
-        assert len(axis.patches) == 2 * len(points)
-        assert [tick.get_text() for tick in axis.get_xticklabels()] == [
-            "B1 · T1\nH32",
-            "B1 · T16\nH16",
-            "B2 · T32\nH16",
+        assert axis.get_gid() == "token-multi-shape-panel"
+        assert axis.get_yscale() == "log"
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · fixed H16"
+        assert len([line for line in axis.lines if line.get_gid() == "token-trend"]) == 2
+        assert [text.get_text() for text in axis.texts if text.get_gid() == "token-rail-key"] == [
+            "B2"
         ]
+        assert len([text for text in axis.texts if text.get_gid() == "token-rail-label"]) == 4
+        assert len(
+            [line for line in axis.lines if line.get_gid() == "token-pair-connector"]
+        ) == len(points)
     finally:
         plt.close(figure)
 
@@ -598,7 +655,7 @@ def test_chunk_dodge_separates_groups_with_the_same_batch_and_different_heads(
             cute_us=40.0 + time,
             triton_us=80.0 + time,
         )
-        for heads in (16, 32)
+        for heads in (16, 24)
         for time in (16, 64)
     ]
     _write_suite(source, records)
@@ -628,7 +685,7 @@ def test_chunk_dodge_separates_groups_with_the_same_batch_and_different_heads(
 
         assert [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-key"] == [
             "B1/H16",
-            "B1/H32",
+            "B1/H24",
         ]
         assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · grouped by B/H"
         assert (

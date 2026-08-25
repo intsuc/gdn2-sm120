@@ -21,8 +21,6 @@ _CHUNK_RAIL_BOTTOM = 0.735
 _CHUNK_CUTE_ROW_Y = 0.775
 _CHUNK_TRITON_ROW_Y = 0.855
 _CHUNK_SPEEDUP_ROW_Y = 0.945
-_TOKEN_DATA_TOP_FRACTION = 0.82
-_TOKEN_SPEEDUP_ROW_Y = 0.94
 _BATCH_LINESTYLES = ("-", "--", ":", "-.")
 _CHUNK_GROUP_DODGE_MAX = 0.20
 _CHUNK_IMPLEMENTATION_DODGE_MAX = 0.045
@@ -546,6 +544,29 @@ def _plot_multi_shape_chunk_panel(
 ) -> None:
     """Draw batch-dodged CuTe/Triton dumbbells around shared length ticks."""
 
+    _plot_multi_shape_scaling_panel(
+        axis,
+        points,
+        title,
+        log_latency=log_latency,
+        palette=palette,
+        gid_prefix="chunk",
+        connect_pairs=True,
+    )
+
+
+def _plot_multi_shape_scaling_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    title: str,
+    *,
+    log_latency: bool,
+    palette: PlotPalette,
+    gid_prefix: str,
+    connect_pairs: bool,
+) -> None:
+    """Draw implementation-colored, batch-styled scaling series and speedup rows."""
+
     from matplotlib.patches import Rectangle
 
     grouped: dict[tuple[int, int], list[BenchmarkPoint]] = {}
@@ -562,7 +583,11 @@ def _plot_multi_shape_chunk_panel(
         for index, batch in enumerate(batches)
     }
     times = sorted({point.time for point in points})
-    center_by_shape, implementation_dodge = _chunk_dodge_geometry(shapes, times)
+    if connect_pairs:
+        center_by_shape, implementation_dodge = _chunk_dodge_geometry(shapes, times)
+    else:
+        center_by_shape = dict.fromkeys(shapes, 0.0)
+        implementation_dodge = 0.0
     xs = [math.log2(time) for time in times]
     cute = [point.cute_median_us for point in points]
     triton = [point.triton_median_us for point in points]
@@ -584,7 +609,7 @@ def _plot_multi_shape_chunk_panel(
             alpha=0.38,
             label="CuTe SM120" if index == 0 else "_nolegend_",
             zorder=2,
-            gid="chunk-trend",
+            gid=f"{gid_prefix}-trend",
         )
         axis.plot(
             triton_xs,
@@ -595,19 +620,20 @@ def _plot_multi_shape_chunk_panel(
             alpha=0.38,
             label="Official Triton" if index == 0 else "_nolegend_",
             zorder=2,
-            gid="chunk-trend",
+            gid=f"{gid_prefix}-trend",
         )
-        for cute_x, triton_x, point in zip(cute_xs, triton_xs, shape_points, strict=True):
-            axis.plot(
-                [cute_x, triton_x],
-                [point.cute_median_us, point.triton_median_us],
-                color=palette.tick,
-                linewidth=1.8,
-                alpha=0.78,
-                solid_capstyle="round",
-                zorder=3,
-                gid="chunk-pair-connector",
-            )
+        if connect_pairs:
+            for cute_x, triton_x, point in zip(cute_xs, triton_xs, shape_points, strict=True):
+                axis.plot(
+                    [cute_x, triton_x],
+                    [point.cute_median_us, point.triton_median_us],
+                    color=palette.tick,
+                    linewidth=1.8,
+                    alpha=0.78,
+                    solid_capstyle="round",
+                    zorder=3,
+                    gid=f"{gid_prefix}-pair-connector",
+                )
         axis.scatter(
             cute_xs,
             [point.cute_median_us for point in shape_points],
@@ -617,7 +643,7 @@ def _plot_multi_shape_chunk_panel(
             edgecolor=palette.background,
             linewidth=1.45,
             zorder=4,
-            gid="chunk-observation-cute",
+            gid=f"{gid_prefix}-observation-cute",
         )
         axis.scatter(
             triton_xs,
@@ -628,7 +654,7 @@ def _plot_multi_shape_chunk_panel(
             edgecolor=palette.background,
             linewidth=1.45,
             zorder=4,
-            gid="chunk-observation-triton",
+            gid=f"{gid_prefix}-observation-triton",
         )
 
     axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
@@ -663,7 +689,7 @@ def _plot_multi_shape_chunk_panel(
     axis.yaxis.set_label_coords(-0.04, _CHUNK_RAIL_BOTTOM / 2.0)
     axis.grid(axis="x", color=palette.grid, linewidth=0.6, alpha=0.55)
     axis.set_axisbelow(True)
-    axis.set_gid("chunk-multi-shape-panel")
+    axis.set_gid(f"{gid_prefix}-multi-shape-panel")
 
     axis.add_patch(
         Rectangle(
@@ -674,7 +700,7 @@ def _plot_multi_shape_chunk_panel(
             facecolor=palette.background,
             edgecolor="none",
             zorder=5,
-            gid="chunk-value-rail",
+            gid=f"{gid_prefix}-value-rail",
         )
     )
     row_height = (1.0 - _CHUNK_RAIL_BOTTOM) / len(groups)
@@ -689,7 +715,7 @@ def _plot_multi_shape_chunk_panel(
             linewidth=0.75,
             zorder=6,
             clip_on=False,
-            gid="chunk-rail-separator",
+            gid=f"{gid_prefix}-rail-separator",
         )
 
     rail_transform = axis.get_xaxis_transform()
@@ -706,7 +732,7 @@ def _plot_multi_shape_chunk_panel(
             linewidth=1.8,
             zorder=7,
             clip_on=False,
-            gid="chunk-rail-key-line",
+            gid=f"{gid_prefix}-rail-key-line",
         )
         axis.text(
             -0.012,
@@ -720,7 +746,7 @@ def _plot_multi_shape_chunk_panel(
             fontweight="bold",
             zorder=7,
             clip_on=False,
-            gid="chunk-rail-key",
+            gid=f"{gid_prefix}-rail-key",
         )
         for point in shape_points:
             label, color = _speedup_label(point.speedup, palette)
@@ -735,7 +761,7 @@ def _plot_multi_shape_chunk_panel(
                 fontsize=label_fontsize,
                 fontweight="bold",
                 zorder=7,
-                gid="chunk-rail-label",
+                gid=f"{gid_prefix}-rail-label",
             )
 
 
@@ -745,150 +771,15 @@ def _plot_token_panel(
     *,
     palette: PlotPalette = _LIGHT_PALETTE,
 ) -> None:
-    shapes = {(point.batch, point.heads) for point in points}
-    if len(shapes) == 1:
-        _plot_token_scaling_panel(axis, points, palette=palette)
-    else:
-        _plot_token_bar_panel(axis, points, palette=palette)
-
-
-def _plot_token_scaling_panel(
-    axis: Any,
-    points: list[BenchmarkPoint],
-    *,
-    palette: PlotPalette = _LIGHT_PALETTE,
-) -> None:
-    """Draw a fixed-B/H token sweep with logarithmic T spacing."""
-
-    points = sorted(points, key=lambda point: point.time)
-    batch = points[0].batch
-    heads = points[0].heads
-    xs = [math.log2(point.time) for point in points]
-    cute = [point.cute_median_us for point in points]
-    triton = [point.triton_median_us for point in points]
-    maximum = max((*cute, *triton))
-
-    axis.plot(
-        xs,
-        cute,
-        color=palette.cute,
-        marker="o",
-        linewidth=2.4,
-        label="CuTe SM120",
-        zorder=3,
+    _plot_multi_shape_scaling_panel(
+        axis,
+        points,
+        MODE_TITLES["token-forward"],
+        log_latency=True,
+        palette=palette,
+        gid_prefix="token",
+        connect_pairs=True,
     )
-    axis.plot(
-        xs,
-        triton,
-        color=palette.triton,
-        marker="s",
-        linewidth=2.2,
-        label="Official Triton",
-        zorder=3,
-    )
-    for x, point in zip(xs, points, strict=True):
-        axis.vlines(
-            x,
-            min(point.cute_median_us, point.triton_median_us),
-            max(point.cute_median_us, point.triton_median_us),
-            color=palette.connector,
-            linewidth=1.0,
-            zorder=1,
-        )
-        label, color = _speedup_label(point.speedup, palette)
-        axis.text(
-            x,
-            _TOKEN_SPEEDUP_ROW_Y,
-            label,
-            transform=axis.get_xaxis_transform(),
-            ha="center",
-            va="center",
-            color=color,
-            fontsize=7.8,
-            fontweight="bold",
-            zorder=5,
-            gid="token-speedup-label",
-        )
-
-    axis.plot(
-        [0.0, 1.0],
-        [0.88, 0.88],
-        transform=axis.transAxes,
-        color=palette.grid,
-        linewidth=0.75,
-        zorder=4,
-        clip_on=False,
-    )
-    axis.set_title(MODE_TITLES["token-forward"], loc="left", fontweight="bold", fontsize=12)
-    axis.set_xticks(
-        xs,
-        [str(point.time) for point in points],
-        rotation=35 if len(points) > 6 else 0,
-        ha="right" if len(points) > 6 else "center",
-        rotation_mode="anchor",
-    )
-    axis.set_xlabel(f"Sequence length T (log₂ spacing) · B{batch}/H{heads}")
-    axis.set_ylabel("Median latency (µs / call)")
-    axis.set_ylim(0.0, maximum / _TOKEN_DATA_TOP_FRACTION)
-    axis.grid(axis="y", color=palette.grid, linewidth=0.8)
-    axis.set_axisbelow(True)
-    axis.set_gid("token-scaling-panel")
-
-
-def _plot_token_bar_panel(
-    axis: Any,
-    points: list[BenchmarkPoint],
-    *,
-    palette: PlotPalette = _LIGHT_PALETTE,
-) -> None:
-    """Keep unrelated token shapes visually independent."""
-
-    cute_color = palette.cute
-    triton_color = palette.triton
-    positions = list(range(len(points)))
-    width = 0.34
-    cute = axis.bar(
-        [position - width / 2 for position in positions],
-        [point.cute_median_us for point in points],
-        width,
-        color=cute_color,
-        label="CuTe SM120",
-    )
-    triton = axis.bar(
-        [position + width / 2 for position in positions],
-        [point.triton_median_us for point in points],
-        width,
-        color=triton_color,
-        label="Official Triton",
-    )
-    maximum = max(
-        *(point.cute_median_us for point in points),
-        *(point.triton_median_us for point in points),
-    )
-    axis.bar_label(cute, fmt="%.1f", padding=3, color=cute_color, fontsize=8.5)
-    axis.bar_label(triton, fmt="%.1f", padding=3, color=triton_color, fontsize=8.5)
-    for position, point in zip(positions, points, strict=True):
-        label, color = _speedup_label(point.speedup, palette)
-        axis.text(
-            position,
-            maximum * 1.16,
-            label,
-            ha="center",
-            va="center",
-            color=color,
-            fontsize=9,
-            fontweight="bold",
-        )
-    axis.set_title(MODE_TITLES["token-forward"], loc="left", fontweight="bold", fontsize=12)
-    axis.set_xticks(
-        positions,
-        [f"B{point.batch} · T{point.time}\nH{point.heads}" for point in points],
-    )
-    axis.set_xlabel("Measured shape (mixed B/H; not a scaling line)")
-    axis.set_ylabel("Median latency (µs / call)")
-    axis.set_ylim(0.0, maximum * 1.27)
-    axis.grid(axis="y", color=palette.grid, linewidth=0.8)
-    axis.set_axisbelow(True)
 
 
 def _render_benchmark_figure(
@@ -908,7 +799,7 @@ def _render_benchmark_figure(
         3,
         1,
         figsize=(16.5, 15.2),
-        gridspec_kw={"height_ratios": (1.0, 1.0, 0.76), "hspace": 0.47},
+        gridspec_kw={"height_ratios": (1.0, 1.0, 1.0), "hspace": 0.47},
     )
     _plot_chunk_panel(
         axes[0],

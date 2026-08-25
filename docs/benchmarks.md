@@ -25,8 +25,9 @@ claim about complete model throughput.
   16/64/128/256/512/1024/2048/4096/8192/16384/32768; B4/T32768 backward is
   excluded because its saved state-boundary tensor exceeds CuTe's 4-GiB
   per-launch byte-address range
-- the canonical token sweep fixes B=1/H=32 and varies T over powers of two;
-  connected token points therefore differ only in sequence length
+- the canonical token sweep fixes H=16, varies B over 1/2/4, and varies T over
+  1/2/4/8/16/32/64/128; each connected batch series therefore differs only in
+  sequence length
 - backward-only builds each graph before timing and uses
   `torch.autograd.grad(..., retain_graph=True)` for both
 - training rebuilds the forward graph inside each timed call and consumes it
@@ -118,14 +119,30 @@ CuTe-versus-official comparison.
 | chunk backward | 4 | 4096 | 16 | 20 / 100 | 5444.0 | 5516.0 | **1.01x** | 3.91e-3 |
 | chunk backward | 4 | 8192 | 16 | 20 / 100 | 10921.2 | 10945.9 | **1.00x** | 3.91e-3 |
 | chunk backward | 4 | 16384 | 16 | 10 / 50 | 21906.1 | 22145.8 | **1.01x** | 3.91e-3 |
-| token forward | 1 | 1 | 32 | 25 / 100 | 13.3 | 25.4 | **1.91x** | 2.98e-8 |
-| token forward | 1 | 2 | 32 | 25 / 100 | 14.8 | 25.2 | **1.70x** | 5.96e-8 |
-| token forward | 1 | 4 | 32 | 25 / 100 | 16.5 | 26.0 | **1.57x** | 5.96e-8 |
-| token forward | 1 | 8 | 32 | 25 / 100 | 18.6 | 28.8 | **1.55x** | 2.38e-7 |
-| token forward | 1 | 16 | 32 | 25 / 100 | 22.8 | 35.0 | **1.54x** | 3.05e-5 |
-| token forward | 1 | 32 | 32 | 25 / 100 | 31.0 | 47.2 | **1.52x** | 3.05e-5 |
-| token forward | 1 | 64 | 32 | 25 / 100 | 49.4 | 71.9 | **1.45x** | 6.10e-5 |
-| token forward | 1 | 128 | 32 | 25 / 100 | 84.3 | 120.2 | **1.43x** | 6.10e-5 |
+| token forward | 1 | 1 | 16 | 25 / 100 | 13.5 | 26.0 | **1.93x** | 2.24e-8 |
+| token forward | 1 | 2 | 16 | 25 / 100 | 15.1 | 26.1 | **1.73x** | 2.98e-8 |
+| token forward | 1 | 4 | 16 | 25 / 100 | 14.9 | 27.0 | **1.81x** | 5.96e-8 |
+| token forward | 1 | 8 | 16 | 25 / 100 | 18.8 | 30.0 | **1.59x** | 6.71e-8 |
+| token forward | 1 | 16 | 16 | 25 / 100 | 23.0 | 35.1 | **1.52x** | 1.91e-6 |
+| token forward | 1 | 32 | 16 | 25 / 100 | 31.3 | 46.7 | **1.49x** | 1.53e-5 |
+| token forward | 1 | 64 | 16 | 25 / 100 | 49.6 | 72.8 | **1.47x** | 6.10e-5 |
+| token forward | 1 | 128 | 16 | 25 / 100 | 84.5 | 119.3 | **1.41x** | 1.22e-4 |
+| token forward | 2 | 1 | 16 | 25 / 100 | 13.5 | 25.7 | **1.90x** | 2.98e-8 |
+| token forward | 2 | 2 | 16 | 25 / 100 | 15.2 | 25.7 | **1.69x** | 2.98e-8 |
+| token forward | 2 | 4 | 16 | 25 / 100 | 16.2 | 27.0 | **1.67x** | 1.91e-6 |
+| token forward | 2 | 8 | 16 | 25 / 100 | 18.4 | 29.2 | **1.59x** | 9.54e-7 |
+| token forward | 2 | 16 | 16 | 25 / 100 | 23.1 | 35.2 | **1.52x** | 1.91e-6 |
+| token forward | 2 | 32 | 16 | 25 / 100 | 31.2 | 47.6 | **1.53x** | 3.05e-5 |
+| token forward | 2 | 64 | 16 | 25 / 100 | 49.7 | 72.0 | **1.45x** | 6.10e-5 |
+| token forward | 2 | 128 | 16 | 25 / 100 | 84.5 | 119.3 | **1.41x** | 1.22e-4 |
+| token forward | 4 | 1 | 16 | 25 / 100 | 16.0 | 24.8 | **1.55x** | 2.98e-8 |
+| token forward | 4 | 2 | 16 | 25 / 100 | 16.9 | 26.0 | **1.54x** | 1.19e-7 |
+| token forward | 4 | 4 | 16 | 25 / 100 | 18.9 | 27.9 | **1.48x** | 1.91e-6 |
+| token forward | 4 | 8 | 16 | 25 / 100 | 21.0 | 31.2 | **1.48x** | 3.05e-5 |
+| token forward | 4 | 16 | 16 | 25 / 100 | 27.2 | 37.4 | **1.37x** | 3.05e-5 |
+| token forward | 4 | 32 | 16 | 25 / 100 | 41.2 | 52.5 | **1.27x** | 6.10e-5 |
+| token forward | 4 | 64 | 16 | 25 / 100 | 65.1 | 78.3 | **1.20x** | 6.10e-5 |
+| token forward | 4 | 128 | 16 | 25 / 100 | 115.2 | 132.5 | **1.15x** | 1.22e-4 |
 
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
 longest-sequence speedups are 1.14x, 1.29x, and 1.36x respectively. Backward is
@@ -140,9 +157,10 @@ The checkpointed path removes the old T=128 correctness cap. B4/T32768
 backward is unsupported and not benchmarked because one saved state-boundary
 tensor exceeds CuTe's 4-GiB per-launch byte-address range.
 
-The fixed B1/H32 token sweep stays ahead at all eight sampled decode lengths.
-Its public-call speedup is 1.91x at T=1 and remains 1.43x at T=128; these rows
-include the default output and final-state allocations on both public paths.
+Token forward is ahead at all 24 measured H16 points. Its public-call speedup
+at T=1 is 1.93x, 1.90x, and 1.55x for B1, B2, and B4 respectively; at T=128 it
+is 1.41x, 1.41x, and 1.15x. These rows include the default output and
+final-state allocations on both public paths.
 
 For full-chunk BF16 training at T>=128, forward checkpoints Y, raw Q-gamma,
 K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32. At
@@ -203,23 +221,20 @@ improvement rather than a comparison against an older canonical capture.
 
 ### Zero-state T=1 token closed form
 
-This experiment uses B1/T1/H32 with `initial_state=None`, unlike the canonical
-token sweep, which enables an initial state. It therefore remains supplemental
-instead of replacing or duplicating the canonical B1/T1/H32 graph point.
+This experiment uses B1/T1/H16 with `initial_state=None`, unlike the canonical
+B1/T1/H16 graph point, which enables an initial state. It therefore remains a
+supplemental allocation-path experiment rather than another canonical point.
 
 | Call boundary / implementation | Warmup / samples | Median | Minimum | Relative result |
 |---|---:|---:|---:|---:|
-| public CuTe, closed form | 25 / 100 | 13.248 | 7.200 | **1.975x vs official** |
-| direct CuTe, generic recurrence | 25 / 100 | 5.776 | 5.632 | baseline |
-| direct CuTe, closed form | 25 / 100 | 5.536 | 5.280 | **1.043x vs generic** |
-| public official Triton | 25 / 100 | 26.160 | 25.312 | baseline |
+| public CuTe, closed form | 25 / 100 | 12.640 | 12.064 | **1.968x vs official** |
+| direct CuTe, generic recurrence | 25 / 100 | 7.424 | 4.448 | baseline |
+| direct CuTe, closed form | 25 / 100 | 6.912 | 4.416 | **1.074x vs generic** |
+| public official Triton | 25 / 100 | 24.880 | 18.176 | baseline |
 
-The untimed official comparison measured `3.81e-6` maximum output difference
-and zero state difference. A separate 1,000-call Nsight Systems launch sweep of
-true 8/16/32-column CTA granularities measured projected launch spacings of
-3.214, 3.219, and 3.189 us for one, two, and four warps respectively, versus
-3.695 us for the generic direct path. The four-warp schedule won and is the only
-variant retained.
+The public CuTe/official comparison, the generic/closed-form comparison, and
+the public/direct closed-form comparison were all bit-identical for both the
+output and final state.
 
 ### Long-forward value-tile dispatch
 
@@ -282,12 +297,10 @@ uv run --group visualization gdn2-sm120-plot \
 it with `-dark` appended to the stem.
 
 The plot uses medians only. A minimum is not a dispersion estimate or confidence
-interval, so it is deliberately not drawn as an error bar. The chunk panels
-compare fixed-H16 B1/B2/B4 measurements and label the official/CuTe speedup at
-every measured T. When all token points share B and H, the token panel connects
-them at log₂-spaced T positions and labels the official/CuTe speedup at every
-sample. If either B or H differs, it falls back to independent grouped bars
-rather than implying a scaling curve across different workloads.
+interval, so it is deliberately not drawn as an error bar. All three panels
+compare fixed-H16 B1/B2/B4 measurements with the same implementation/batch
+dodging, CuTe/official pair connectors, batch-specific line styles, and
+speedup rails. Each batch series is connected at log₂-spaced T positions.
 
 ## Commands
 
@@ -306,11 +319,13 @@ uv run gdn2-sm120-bench \
   --mode chunk-training --batch 1 --time 256 --heads 16 --dtype bf16 \
   --warmup 30 --repeats 100 --official-repo /tmp/GatedDeltaNet-2
 
-for time in 1 2 4 8 16 32 64 128; do
-  uv run gdn2-sm120-bench \
-    --mode token-forward --batch 1 --time "$time" --heads 32 --dtype bf16 \
-    --warmup 25 --repeats 100 --official-repo /tmp/GatedDeltaNet-2 \
-    --json "benchmark-results/token-t${time}.json"
+for batch in 1 2 4; do
+  for time in 1 2 4 8 16 32 64 128; do
+    uv run gdn2-sm120-bench \
+      --mode token-forward --batch "$batch" --time "$time" --heads 16 --dtype bf16 \
+      --warmup 25 --repeats 100 --official-repo /tmp/GatedDeltaNet-2 \
+      --json "benchmark-results/token-b${batch}-t${time}.json"
+  done
 done
 ```
 
@@ -326,7 +341,8 @@ The optimization goal is met across every supported measured chunk point.
 Chunk forward is faster at every B1/B2/B4 length through T=32768. Backward is
 faster at all 11 B1 and B2 lengths and all 10 measured B4 lengths through
 T=16384; B4/T32768 is outside the current CuTe per-launch address range and is
-excluded. Token forward is faster at every fixed-B1/H32 point through T=128.
+excluded. Token forward is measured over the same fixed-H16 B1/B2/B4 batch
+matrix and is faster at all 24 points through T=128.
 These are primitive-level latencies, not complete training-throughput
 measurements. Reducing checkpoint/workspace memory, improving multi-batch
 backward scaling, additional dimensions, packed sequences, and fused
