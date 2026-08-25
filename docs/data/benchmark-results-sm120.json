@@ -104,6 +104,16 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
     },
     {
+      "mode": "chunk-forward", "batch": 1, "time": 32768, "heads": 16, "dtype": "bf16",
+      "warmup": 10, "repeats": 50,
+      "cute": {"implementation": "cute-sm120", "median_us": 3725.2960205078125, "minimum_us": 3716.576099395752},
+      "triton": {"implementation": "official-triton", "median_us": 4231.872081756592, "minimum_us": 4224.703788757324},
+      "speedup": 1.1359827671304696, "validation_max_abs": 0.001815885305404663,
+      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
+      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
+      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
+    },
+    {
       "mode": "chunk-backward", "batch": 1, "time": 16, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
       "cute": {"implementation": "cute-sm120", "median_us": 112.06399649381638, "minimum_us": 109.6000000834465},
@@ -199,6 +209,16 @@
       "cute": {"implementation": "cute-sm120", "median_us": 5810.63985824585, "minimum_us": 5761.023998260498},
       "triton": {"implementation": "official-triton", "median_us": 6353.487968444824, "minimum_us": 6340.479850769043},
       "speedup": 1.093423120937124, "validation_max_abs": 0.001953125,
+      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
+      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
+      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
+    },
+    {
+      "mode": "chunk-backward", "batch": 1, "time": 32768, "heads": 16, "dtype": "bf16",
+      "warmup": 10, "repeats": 50,
+      "cute": {"implementation": "cute-sm120", "median_us": 11737.599849700928, "minimum_us": 11654.047966003418},
+      "triton": {"implementation": "official-triton", "median_us": 12638.015747070312, "minimum_us": 12573.568344116211},
+      "speedup": 1.0767120969277486, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"

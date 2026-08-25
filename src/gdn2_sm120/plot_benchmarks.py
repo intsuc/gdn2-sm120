@@ -445,22 +445,30 @@ def _plot_chunk_panel(
         )
 
     rail_transform = axis.get_xaxis_transform()
+    speedup_fontsize = 6.2 if len(points) >= 11 else 7.8
+    latency_fontsize = 6.2 if len(points) >= 11 else 7.7
     for x, point in zip(xs, points, strict=True):
         speedup_label, speedup_color = _speedup_label(point.speedup, palette)
         for text, y, color, size, weight in (
-            (speedup_label, _CHUNK_SPEEDUP_ROW_Y, speedup_color, 7.8, "bold"),
+            (
+                speedup_label,
+                _CHUNK_SPEEDUP_ROW_Y,
+                speedup_color,
+                speedup_fontsize,
+                "bold",
+            ),
             (
                 f"{point.triton_median_us:.1f}",
                 _CHUNK_TRITON_ROW_Y,
                 triton_color,
-                7.7,
+                latency_fontsize,
                 "normal",
             ),
             (
                 f"{point.cute_median_us:.1f}",
                 _CHUNK_CUTE_ROW_Y,
                 cute_color,
-                7.7,
+                latency_fontsize,
                 "normal",
             ),
         ):

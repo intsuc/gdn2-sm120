@@ -195,11 +195,13 @@ Representative BF16 medians on the target workstation are:
 | chunk forward | B1 T512 H16 | 65.9 us | 181.6 us | **2.76x** |
 | chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
 | chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
+| chunk forward | B1 T32768 H16 | 3725.3 us | 4231.9 us | **1.14x** |
 | chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
 | chunk backward | B1 T64 H16 | 175.5 us | 399.6 us | **2.28x** |
 | chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
 | chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
 | chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
+| chunk backward | B1 T32768 H16 | 11737.6 us | 12638.0 us | **1.08x** |
 | token forward | B1 T1 H32 | 13.3 us | 25.4 us | **1.91x** |
 | token forward | B1 T128 H32 | 84.3 us | 120.2 us | **1.43x** |
 
@@ -239,8 +241,8 @@ log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
 non-default CUDA streams, unaligned contiguous recurrent states, reusable
 output buffers, and explicit in-place recurrent state updates. In the measured
 B1/H16 BF16 sweep, both chunk forward and chunk backward remain faster than the
-official path at every sampled length through T=16384. Backward speedup ranges
-from 2.45x at T=16 to 1.09x at T=16384. The fixed B1/H32 token sweep is 1.91x
+official path at every sampled length through T=32768. Backward speedup ranges
+from 2.45x at T=16 to 1.08x at T=32768. The fixed B1/H32 token sweep is 1.91x
 faster at T=1 and 1.43x faster at T=128. The checkpointed path trades memory
 for speed: compact BF16 boundaries halve checkpoint bytes relative to FP32, but
 the CuTe path still retains both boundary sets and compact-WY workspace and

@@ -59,6 +59,7 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 4096 | 16 | 20 / 100 | 446.1 | 476.4 | **1.07x** | 1.38e-3 |
 | chunk forward | 1 | 8192 | 16 | 20 / 100 | 978.0 | 1036.4 | **1.06x** | 1.41e-3 |
 | chunk forward | 1 | 16384 | 16 | 10 / 50 | 1889.5 | 2111.5 | **1.12x** | 1.50e-3 |
+| chunk forward | 1 | 32768 | 16 | 10 / 50 | 3725.3 | 4231.9 | **1.14x** | 1.82e-3 |
 | chunk backward | 1 | 16 | 16 | 40 / 300 | 112.1 | 274.6 | **2.45x** | 3.91e-3 |
 | chunk backward | 1 | 64 | 16 | 40 / 300 | 175.5 | 399.6 | **2.28x** | 2.44e-3 |
 | chunk backward | 1 | 128 | 16 | 40 / 300 | 126.4 | 279.3 | **2.21x** | 2.08e-3 |
@@ -69,6 +70,7 @@ CuTe-versus-official comparison.
 | chunk backward | 1 | 4096 | 16 | 20 / 100 | 1318.8 | 1465.4 | **1.11x** | 3.91e-3 |
 | chunk backward | 1 | 8192 | 16 | 20 / 100 | 2838.6 | 3126.1 | **1.10x** | 2.93e-3 |
 | chunk backward | 1 | 16384 | 16 | 10 / 50 | 5810.6 | 6353.5 | **1.09x** | 1.95e-3 |
+| chunk backward | 1 | 32768 | 16 | 10 / 50 | 11737.6 | 12638.0 | **1.08x** | 3.91e-3 |
 | token forward | 1 | 1 | 32 | 25 / 100 | 13.3 | 25.4 | **1.91x** | 2.98e-8 |
 | token forward | 1 | 2 | 32 | 25 / 100 | 14.8 | 25.2 | **1.70x** | 5.96e-8 |
 | token forward | 1 | 4 | 32 | 25 / 100 | 16.5 | 26.0 | **1.57x** | 5.96e-8 |
@@ -78,11 +80,11 @@ CuTe-versus-official comparison.
 | token forward | 1 | 64 | 32 | 25 / 100 | 49.4 | 71.9 | **1.45x** | 6.10e-5 |
 | token forward | 1 | 128 | 32 | 25 / 100 | 84.3 | 120.2 | **1.43x** | 6.10e-5 |
 
-Forward and backward both stay ahead at every measured point through T=16384.
+Forward and backward both stay ahead at every measured point through T=32768.
 The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
 the new CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
 scan. T=128 additionally enables compact BF16 checkpoints and measures 126.4 us.
-The backward advantage narrows from 2.45x at T=16 to 1.09x at T=16384 without a
+The backward advantage narrows from 2.45x at T=16 to 1.08x at T=32768 without a
 measured crossover, while the checkpointed path also removes the old T=128
 correctness cap.
 
@@ -262,9 +264,9 @@ between old and new measurements.
 
 The optimization goal is met for all three kernel families and now extends to
 substantially longer chunk sequences. Chunk forward and backward-only are
-faster at every measured length through T=16384, and token forward is faster at
+faster at every measured length through T=32768, and token forward is faster at
 every fixed-B1/H32 point through T=128. The backward margin gradually narrows
-but remains 1.09x at the longest point. These are primitive-level latencies,
+but remains 1.08x at the longest point. These are primitive-level latencies,
 not complete training-throughput measurements. Reducing
 checkpoint/workspace memory, additional dimensions, packed sequences, and
 fused normalization/gates remain separate milestones; the measured B1/H16

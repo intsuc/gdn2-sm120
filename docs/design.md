@@ -136,7 +136,7 @@ cap. Tensor-core operands and long BF16 checkpoints are stored or narrowed to
 the input dtype, so the long VJP is a controlled low-precision approximation
 rather than a bit-exact FP32 VJP. Tests require per-gradient relative L2 error
 below 1% and maximum absolute error below `5e-3`; measured official comparisons
-through T=16384 remain within `3.91e-3` maximum absolute error.
+through T=32768 remain within `3.91e-3` maximum absolute error.
 
 For B1/T512/H16, the compact-WY stage uses about 22 MiB of lifetime-colored
 sequence workspace plus 1.5 MiB of square workspace.
@@ -236,7 +236,7 @@ Chunk-forward tensor layouts and preparation are shape-specialized, while the
 full-chunk inter-state scan uses a runtime chunk loop. The state dependency is
 still sequential across chunks, but the rearranged long-BF16 pipeline removes
 one product from that critical path and remains faster than the official path
-through the longest measured sequence, T=16384.
+through the longest measured sequence, T=32768.
 
 ## Primary references
 
