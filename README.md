@@ -201,15 +201,15 @@ Representative BF16 medians on the target workstation are:
 | chunk forward | B2 T32768 H16 | 6155.5 us | 7955.2 us | **1.29x** |
 | chunk forward | B4 T32768 H16 | 11553.5 us | 15661.8 us | **1.36x** |
 | chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
-| chunk backward | B1 T64 H16 | 175.5 us | 399.6 us | **2.28x** |
-| chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
-| chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
+| chunk backward | B1 T64 H16 | 131.6 us | 279.0 us | **2.12x** |
+| chunk backward | B1 T512 H16 | 172.1 us | 329.6 us | **1.91x** |
+| chunk backward | B1 T2048 H16 | 639.0 us | 704.5 us | **1.10x** |
 | chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
 | chunk backward | B1 T32768 H16 | 11737.6 us | 12638.0 us | **1.08x** |
-| chunk backward | B2 T8192 H16 | 5640.4 us | 5723.3 us | **1.01x** |
-| chunk backward | B2 T32768 H16 | 24403.8 us | 23002.3 us | **0.94x** |
-| chunk backward | B4 T256 H16 | 295.7 us | 392.2 us | **1.33x** |
-| chunk backward | B4 T32768 H16 | 65718.2 us | 43955.4 us | **0.67x** |
+| chunk backward | B2 T8192 H16 | 5582.7 us | 5675.6 us | **1.02x** |
+| chunk backward | B2 T32768 H16 | 22679.8 us | 22951.8 us | **1.01x** |
+| chunk backward | B4 T256 H16 | 271.4 us | 392.1 us | **1.44x** |
+| chunk backward | B4 T16384 H16 | 21906.1 us | 22145.8 us | **1.01x** |
 | token forward | B1 T1 H32 | 13.3 us | 25.4 us | **1.91x** |
 | token forward | B1 T128 H32 | 84.3 us | 120.2 us | **1.43x** |
 
@@ -230,10 +230,15 @@ for the rearranged output identity while preserving raw Q-gamma and A-qk
 checkpoint bits for backward. Backward first precomputes every independent
 `A_qk.T @ dO` product, then runs a reverse boundary scan with 128-bit
 `cp.async` staging and shuffle-cached decay. It emits compact BF16 `dR` and
-`dS` operands while retaining `dS0` in FP32. The chunk-local compact-WY graph
-combines paired products and producer epilogues into 12 launches, or 11 at
-T>=2048 on the full-chunk BF16 path where the state/gradient decay dot is folded
-into a large state-product kernel.
+`dS` operands while retaining `dS0` in FP32. The ordered scan uses V16 when
+`batch * heads >= 32`, plus the midrange where `16 <= batch * heads < 32` and
+`T <= 2048`; other shapes use V8. V16 halves duplicated Y/Q-gamma/K-tail reads,
+while V8 exposes twice as many CTAs for long underfilled grids; both retain the
+same eight K-split warps. The chunk-local compact-WY graph combines paired
+products and producer epilogues into 12 launches. On the compact BF16 path it
+folds the state/gradient decay dot into a large state-product kernel, reducing
+the local graph to 11 launches, when
+`batch * ceil(T / 16) * heads >= 2048`.
 
 The implementation is independently derived from the paper's equations. No
 source from the official GDN2 repository (NVIDIA Source Code License-NC) is
@@ -250,8 +255,9 @@ non-default CUDA streams, unaligned contiguous recurrent states, reusable
 output buffers, and explicit in-place recurrent state updates. In the measured
 B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at every sampled length through T=32768. Chunk backward remains faster for all
-B1 points, for B2 through T=8192, and for B4 through T=256; the official path
-is faster at the longer measured B2/B4 points. The fixed B1/H32 token sweep is
+B1 and B2 points and all 10 measured B4 points through T=16384. B4/T32768
+backward is not benchmarked because one saved state-boundary tensor exceeds
+CuTe's 4-GiB per-launch byte-address range. The fixed B1/H32 token sweep is
 1.91x faster at T=1 and 1.43x faster at T=128. The checkpointed path trades
 memory for speed: compact BF16 boundaries halve checkpoint bytes relative to
 FP32, but the CuTe path still retains both boundary sets and compact-WY

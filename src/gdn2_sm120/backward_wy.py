@@ -26,7 +26,7 @@ _MMA_THREADS = 32 * _MMA_WARPS
 _CHAIN_THREADS = _DIM
 _STATE_DOT_KEY_WARPS = 8
 _STATE_DOT_THREADS = 32 * _STATE_DOT_KEY_WARPS
-_FUSED_STATE_DOT_MIN_TIME = 2048
+_FUSED_STATE_DOT_MIN_CHUNK_HEADS = 2048
 _LINEAR_THREADS = 256
 
 _TRIANGLE_NONE = 0
@@ -36,6 +36,17 @@ _TRIANGLE_STRICT_LOWER = 2
 _COMBINE_COPY = 0
 _COMBINE_SUBTRACT = 1
 _COMBINE_NEGATE = 2
+
+
+def _use_fused_state_decay_dot(
+    batch: int,
+    n_chunks: int,
+    heads: int,
+    compact_boundaries: bool,
+) -> bool:
+    """Select fusion once the chunk grid amortizes its extra dot work."""
+
+    return compact_boundaries and batch * n_chunks * heads >= _FUSED_STATE_DOT_MIN_CHUNK_HEADS
 
 
 @dataclass(frozen=True)
@@ -1190,6 +1201,7 @@ def _launch_compact_wy_chunk_vjp(
     padded_time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    fuse_state_decay_dot: cutlass.Constexpr,
     scale: cutlass.Float32,
     stream: cuda.CUstream,
 ):
@@ -1217,9 +1229,6 @@ def _launch_compact_wy_chunk_vjp(
         stride=(_CHUNK_SIZE * 8, 8, 1),
     )
     chunk_grid = (q.shape[0] * n_chunks * heads, 1, 1)
-    fuse_state_decay_dot = cutlass.const_expr(
-        time >= _FUSED_STATE_DOT_MIN_TIME and state_boundaries.element_type == operand_type
-    )
     linear_grid = (
         (q.shape[0] * padded_time * heads * _DIM + _LINEAR_THREADS - 1) // _LINEAR_THREADS,
         1,
@@ -1531,6 +1540,7 @@ def _compile_compact_wy_chunk_vjp(
     precomputed_residual_dtype,
     has_precomputed_d_residual: bool,
     has_precomputed_d_initial_state: bool,
+    fuse_state_decay_dot: bool,
 ):
     """Compile the staged implementation once per static tensor layout."""
 
@@ -1603,6 +1613,7 @@ def _compile_compact_wy_chunk_vjp(
         padded_time,
         n_chunks,
         heads,
+        fuse_state_decay_dot,
         0.0,
         make_fake_stream(),
         options="--enable-tvm-ffi",
@@ -1629,14 +1640,16 @@ def compact_wy_chunk_vjp_cute(
 
     The public precomputed-residual schedule uses 12 ordered launches and
     consumes forward/reverse state boundaries plus the saved compact-WY
-    auxiliaries.  At T>=2048 its state-decay dot is fused into the shared-S0
-    product, leaving 11 launches.  BF16 full chunks use BF16 checkpoints when
-    the boundary scan also supplies an exact FP32
+    auxiliaries.  Once the grid reaches 2048 chunk-heads its state-decay dot is
+    fused into the shared-S0 product, leaving 11 launches.  BF16 full chunks use
+    BF16 checkpoints when the boundary scan also supplies an exact FP32
     ``precomputed_d_initial_state``.  Passing its precomputed ``d_residual``
     removes two duplicate products; this tensor is BF16 for compact boundaries
     and FP32 otherwise.  Dual products, paired K16 products, and producer
     epilogues remove additional launch boundaries and operand reads.  All
-    large BT=16 products use warp ``m16n8k16`` MMA.
+    large BT=16 products use warp ``m16n8k16`` MMA.  State-dot fusion follows
+    total chunk-head work, so multi-batch shapes reach its crossover at shorter
+    sequence lengths.
 
     Tensor-core operands are narrowed to the input FP16/BF16 dtype in shared
     memory.  Long training checkpoints Y/Q-gamma/K-tail/A-qk in that dtype,
@@ -1744,6 +1757,12 @@ def compact_wy_chunk_vjp_cute(
     output_scale = float(scale) if scale is not None else 1.0 / math.sqrt(_DIM)
     if not math.isfinite(output_scale):
         raise ValueError("scale must be finite")
+    fuse_state_decay_dot = _use_fused_state_decay_dot(
+        batch,
+        n_chunks,
+        heads,
+        compact_boundaries,
+    )
 
     sequence_workspace_shape = (batch, padded_time, heads, _DIM)
     scratch_count = 5 if precomputed_d_residual is not None else 6
@@ -1830,7 +1849,7 @@ def compact_wy_chunk_vjp_cute(
     )
     lower, d_aqk, d_lower = square_workspaces
     state_decay_shape = (batch, n_chunks, heads, _DIM)
-    if compact_boundaries and time >= _FUSED_STATE_DOT_MIN_TIME:
+    if fuse_state_decay_dot:
         # The dual S0 product produces these dots before ``erase_bar`` reaches
         # its final consumer, so the long fused schedule needs a small,
         # independent output (1 MiB at T2048/H16).
@@ -1860,6 +1879,7 @@ def compact_wy_chunk_vjp_cute(
             precomputed_residual_dtype,
             precomputed_d_residual is not None,
             precomputed_d_initial_state is not None,
+            fuse_state_decay_dot,
         )
         stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)
         compiled(

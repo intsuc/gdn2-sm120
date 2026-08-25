@@ -102,7 +102,12 @@ boundaries and
 dR = K_tail dS_next + A_qk.T dO
 ```
 
-using a K-split eight-warp MMA schedule. Its persistent state remains FP32 in
+using a K-split eight-warp MMA schedule. The ordered scan selects a 16-column
+value tile (V16) when `batch * heads >= 32`. It also selects V16 when
+`16 <= batch * heads < 32` and `T <= 2048`; other shapes use V8. Both variants
+retain the same eight K-split warps. V16 halves duplicated reads of Y, Q-gamma,
+and K-tail, while V8 exposes twice as many CTAs when long serial scans would
+otherwise underfill the 188-SM target. The persistent state remains FP32 in
 registers; the long BF16 path stores forward/reverse checkpoints in BF16 and
 returns the exact FP32 initial-state gradient separately. T=64 through T=127
 retain FP32 boundaries.
@@ -114,14 +119,16 @@ independent chunk-local token VJPs whose inverse reconstruction is reset from
 an FP32 boundary after at most 16 tokens. T>=128 always uses compact-WY. For
 each chunk it forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
 `dK_bar`, and the reverse cumulative gate gradient through 12 ordered CuTe
-launches. At T>=2048 the state-decay dot is folded into the shared-S0 product,
-reducing this to 11. Dual-output S0/square products, paired K16 products, and
-producer epilogues remove redundant reads and launch boundaries. The large
-`16x128` and `16x16` products use warp MMA; the triangular transpose solve and
-gate chain accumulate in FP32. The boundary scan stores `dR`, avoiding two
-duplicate matrix products; compact BF16 scans round only the returned `dR`
-while keeping the ordered boundary recurrence and its precompute scratch in
-FP32.
+launches. On the compact BF16 path, the state-decay dot is folded into the
+shared-S0 product when `batch * ceil(T / 16) * heads >= 2048`, reducing this to
+11 launches. For the canonical H16 sweep that threshold begins at T=2048 for
+B1, T=1024 for B2, and T=512 for B4. Dual-output S0/square products, paired K16
+products, and producer epilogues remove redundant reads and launch boundaries.
+The large `16x128` and `16x16` products use warp MMA; the triangular transpose
+solve and gate chain accumulate in FP32. The boundary scan stores `dR`,
+avoiding two duplicate matrix products; compact BF16 scans round only the
+returned `dR` while keeping the ordered boundary recurrence and its precompute
+scratch in FP32.
 
 The inverse requires `1 - (beta * k).T @ k` to remain nonzero. With normalized
 keys and erase gates below one this is the usual delta-rule operating region.
@@ -144,20 +151,13 @@ sequence workspace plus 1.5 MiB of square workspace.
 ### Multi-batch training boundary limit
 
 Some generated CuTe compact-copy layouts use 32-bit byte offsets. Before a
-gradient-enabled public call, the wrapper therefore computes the storage of
-one `[B, ceil(T / 16) + 1, H, 128, 128]` state-boundary tensor and splits the
-batch when that tensor would exceed the 4-GiB address range. Full-chunk BF16
-training at T>=128 uses two-byte compact boundaries; FP16, short, and partial
-tail paths use four-byte FP32 boundaries for this calculation.
-
-The split is balanced rather than taking the largest possible first tile. For
-B4/T32768/H16 BF16, the public autograd path consequently uses B2+B2, allowing
-both tiles to reuse one compiled specialization and comparable grid sizes. All
-six sequence inputs and an optional initial state are sliced on the batch axis;
-outputs and final states are concatenated on that axis, so autograd routes each
-gradient through the matching tile. Forward-only calls remain one unsplit
-public apply, and a direct low-level training call above the limit fails
-explicitly instead of permitting a wrapped address.
+gradient-enabled call, the implementation therefore checks the storage of one
+`[B, ceil(T / 16) + 1, H, 128, 128]` state-boundary tensor and rejects a shape
+that exceeds the 4-GiB per-launch address range instead of permitting a wrapped
+address. Full-chunk BF16 training at T>=128 uses two-byte compact boundaries;
+FP16, short, and partial-tail paths use four-byte FP32 boundaries for this
+calculation. B4/T32768/H16 BF16 exceeds the limit and is consequently
+unsupported for backward and omitted from the canonical benchmark sweep.
 
 ## Token forward
 

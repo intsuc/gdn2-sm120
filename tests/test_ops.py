@@ -34,88 +34,16 @@ def test_compact_wy_backward_dispatch(
     assert ops_module._use_compact_wy_backward(batch, time, heads) is expected
 
 
-@pytest.mark.parametrize(
-    ("batch", "time", "heads", "dtype", "expected"),
-    [
-        (3, 32768, 16, torch.bfloat16, ((0, 3),)),
-        (4, 32768, 16, torch.bfloat16, ((0, 2), (2, 4))),
-        (2, 32768, 16, torch.float16, ((0, 1), (1, 2))),
-        (2, 32769, 16, torch.bfloat16, ((0, 1), (1, 2))),
-        (1000, 63, 16, torch.bfloat16, ((0, 1000),)),
-    ],
-    ids=["b3-safe", "b4-balanced", "fp32-boundaries", "partial-tail", "short"],
-)
-def test_training_batch_ranges_respect_boundary_address_limit(
+@pytest.mark.parametrize("batch", [1, 2, 4])
+def test_chunk_gdn2_uses_one_launch_for_supported_batches(
+    monkeypatch: pytest.MonkeyPatch,
     batch: int,
-    time: int,
-    heads: int,
-    dtype: torch.dtype,
-    expected: tuple[tuple[int, int], ...],
 ) -> None:
-    assert ops_module._training_batch_ranges(batch, time, heads, dtype) == expected
-
-
-@pytest.mark.parametrize("has_initial_state", [False, True], ids=["zero-state", "initial-state"])
-def test_chunk_gdn2_balances_training_slices_and_slices_initial_state(
-    monkeypatch: pytest.MonkeyPatch,
-    has_initial_state: bool,
-) -> None:
-    batch, time, heads = 4, 128, 1
-    boundary_bytes_per_batch = (time // 16 + 1) * heads * 128 * 128 * 2
-    monkeypatch.setattr(
-        ops_module,
-        "_CUTE_TENSOR_BYTE_ADDRESS_LIMIT",
-        2 * boundary_bytes_per_batch,
-    )
-    observed: list[tuple[int, bool, tuple[float, ...]]] = []
-
-    def fake_apply(q, _k, v, _g, _beta, _w, initial_state, _scale, prepare_backward):
-        initial_values = (
-            () if initial_state is None else tuple(initial_state[:, 0, 0, 0].detach().tolist())
-        )
-        observed.append((q.shape[0], prepare_backward, initial_values))
-        final_state = torch.zeros(
-            (q.shape[0], q.shape[2], 128, 128),
-            device=q.device,
-            dtype=torch.float32,
-        )
-        return v.clone(), final_state
-
-    monkeypatch.setattr(ops_module._ChunkGDN2, "apply", staticmethod(fake_apply))
-    sequence = torch.zeros((batch, time, heads, 128), dtype=torch.bfloat16, requires_grad=True)
-    initial_state = None
-    if has_initial_state:
-        initial_state = (
-            torch.arange(batch, dtype=torch.float32)
-            .view(batch, 1, 1, 1)
-            .expand(batch, heads, 128, 128)
-            .clone()
-            .requires_grad_()
-        )
-
-    output, final_state = chunk_gdn2(
-        *([sequence] * 6),
-        initial_state,
-        output_final_state=True,
-    )
-
-    assert output.shape == sequence.shape
-    assert final_state is not None and final_state.shape == (batch, heads, 128, 128)
-    expected_initial_values = [(0.0, 1.0), (2.0, 3.0)] if has_initial_state else [(), ()]
-    assert observed == [
-        (2, True, expected_initial_values[0]),
-        (2, True, expected_initial_values[1]),
-    ]
-
-
-def test_chunk_gdn2_does_not_slice_inference_at_boundary_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(ops_module, "_CUTE_TENSOR_BYTE_ADDRESS_LIMIT", 1)
-    observed_batches: list[tuple[int, bool]] = []
+    observed_batches: list[int] = []
 
     def fake_apply(q, _k, v, _g, _beta, _w, _state, _scale, prepare_backward):
-        observed_batches.append((q.shape[0], prepare_backward))
+        assert prepare_backward
+        observed_batches.append(q.shape[0])
         final_state = torch.zeros(
             (q.shape[0], q.shape[2], 128, 128),
             device=q.device,
@@ -124,12 +52,29 @@ def test_chunk_gdn2_does_not_slice_inference_at_boundary_limit(
         return v.clone(), final_state
 
     monkeypatch.setattr(ops_module._ChunkGDN2, "apply", staticmethod(fake_apply))
-    sequence = torch.zeros((4, 128, 1, 128), dtype=torch.bfloat16)
+    sequence = torch.zeros((batch, 128, 1, 128), dtype=torch.bfloat16, requires_grad=True)
 
-    output, _ = chunk_gdn2(*([sequence] * 6))
+    output, final_state = chunk_gdn2(*([sequence] * 6), output_final_state=True)
 
     assert output.shape == sequence.shape
-    assert observed_batches == [(4, False)]
+    assert final_state is not None and final_state.shape == (batch, 1, 128, 128)
+    assert observed_batches == [batch]
+
+
+def test_chunk_gdn2_rejects_b4_t32768_training_before_kernel_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Meta storage exercises the exact production shape without allocating or
+    # launching the unsafe B4/T32768 kernel.  The CUDA traits are overridden
+    # only far enough for chunk_forward's address-range guard to run.
+    shape = (4, 32768, 16, 128)
+    sequence = torch.empty(shape, device="meta", dtype=torch.bfloat16, requires_grad=True)
+    monkeypatch.setattr(torch.Tensor, "is_cuda", property(lambda _tensor: True))
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device=None: (12, 0))
+    monkeypatch.setenv("CUTE_DSL_ARCH", "sm_120")
+
+    with pytest.raises(ValueError, match="4-GiB per-launch address limit"):
+        chunk_gdn2(*([sequence] * 6))
 
 
 def test_long_inference_does_not_materialize_backward_aux(monkeypatch) -> None:
@@ -429,86 +374,3 @@ def test_chunk_gdn2_can_hide_final_state() -> None:
     assert output.shape == shape
     assert final_state is None
     assert all(tensor.grad is not None for tensor in tensors)
-
-
-@pytest.mark.cuda
-@pytest.mark.slow
-@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
-@pytest.mark.parametrize("has_initial_state", [False, True], ids=["zero-state", "initial-state"])
-def test_split_training_batch_matches_unsplit_on_current_stream(
-    monkeypatch: pytest.MonkeyPatch,
-    has_initial_state: bool,
-) -> None:
-    batch, time, heads = 4, 128, 1
-    shape = (batch, time, heads, 128)
-    state_shape = (batch, heads, 128, 128)
-    dtype = torch.bfloat16
-    scale = 0.125
-    generator = torch.Generator(device="cuda").manual_seed(2605_4128 + has_initial_state)
-    q = torch.nn.functional.normalize(
-        torch.randn(shape, generator=generator, device="cuda"), dim=-1
-    ).to(dtype)
-    k = torch.nn.functional.normalize(
-        torch.randn(shape, generator=generator, device="cuda"), dim=-1
-    ).to(dtype)
-    base = [
-        q,
-        k,
-        (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype),
-        -torch.rand(shape, generator=generator, device="cuda") * 0.03,
-        torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype),
-        torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype),
-    ]
-    initial_state = (
-        torch.randn(state_shape, generator=generator, device="cuda") * 0.03
-        if has_initial_state
-        else None
-    )
-    d_output = (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype)
-    boundary_bytes_per_batch = (time // 16 + 1) * heads * 128 * 128 * 2
-    monkeypatch.setattr(
-        ops_module,
-        "_CUTE_TENSOR_BYTE_ADDRESS_LIMIT",
-        2 * boundary_bytes_per_batch,
-    )
-
-    torch.cuda.synchronize()
-    stream = torch.cuda.Stream()
-    with torch.cuda.stream(stream):
-        actual_inputs = [tensor.detach().requires_grad_() for tensor in base]
-        actual_initial = (
-            initial_state.detach().requires_grad_() if initial_state is not None else None
-        )
-        actual_output, actual_final = chunk_gdn2(
-            *actual_inputs,
-            actual_initial,
-            scale=scale,
-            output_final_state=False,
-        )
-        assert actual_final is None
-        actual_targets = (
-            (*actual_inputs, actual_initial) if actual_initial is not None else tuple(actual_inputs)
-        )
-        # Hiding the final state exercises d_final_state=None in both slices.
-        actual = torch.autograd.grad(actual_output, actual_targets, d_output)
-
-        expected_inputs = [tensor.detach().requires_grad_() for tensor in base]
-        expected_initial = (
-            initial_state.detach().requires_grad_() if initial_state is not None else None
-        )
-        expected_output, _ = ops_module._ChunkGDN2.apply(
-            *expected_inputs,
-            expected_initial,
-            scale,
-            True,
-        )
-        expected_targets = (
-            (*expected_inputs, expected_initial)
-            if expected_initial is not None
-            else tuple(expected_inputs)
-        )
-        expected = torch.autograd.grad(expected_output, expected_targets, d_output)
-    stream.synchronize()
-
-    for gradient, reference in zip(actual, expected, strict=True):
-        torch.testing.assert_close(gradient, reference, atol=5e-3, rtol=1e-2)

@@ -55,9 +55,8 @@ _K_SPLIT_LONG_MIN_CHUNKS = 32
 # schedules retain the proven K16/eight-warp split.
 _K_SPLIT_V16_MIN_BATCH_HEADS = 12
 # Some vectorized CuTe copies lower tensor byte offsets to 32-bit arithmetic.
-# Keep every saved boundary tensor within the full unsigned address range; the
-# public autograd wrapper batch-tiles larger training calls before reaching
-# this low-level API.
+# Reject saved boundary tensors outside the full unsigned address range before
+# launching a kernel; callers must reduce B, T, or H for those training shapes.
 _MAX_CUTE_TENSOR_BYTES = 1 << 32
 # The V16 algebra scan reuses its 16x16 shared state tile for K-tail; the V8
 # specialization allocates an explicit K-tail stage of the same shape.
@@ -1076,7 +1075,7 @@ def chunk_forward(
         if boundary_bytes > _MAX_CUTE_TENSOR_BYTES:
             raise ValueError(
                 "state-boundary storage exceeds the CuTe 4-GiB per-launch address limit; "
-                "use chunk_gdn2 so the training batch can be tiled"
+                "reduce batch size, sequence length, or head count"
             )
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.

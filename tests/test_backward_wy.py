@@ -8,6 +8,7 @@ import torch
 
 from gdn2_sm120.backward_parallel import WYBoundaryAux, wy_boundary_dstate
 from gdn2_sm120.backward_wy import (
+    _use_fused_state_decay_dot,
     compact_wy_chunk_vjp_cute,
     compact_wy_chunk_vjp_reference,
 )
@@ -132,6 +133,28 @@ def _sm120_available() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() == (12, 0)
 
 
+@pytest.mark.parametrize(
+    ("batch", "n_chunks", "heads", "compact_boundaries", "expected"),
+    [
+        pytest.param(1, 64, 16, True, False, id="b1-t1024-stays-unfused"),
+        pytest.param(1, 127, 16, True, False, id="b1-below-crossover"),
+        pytest.param(1, 128, 16, True, True, id="b1-t2048-crossover"),
+        pytest.param(2, 64, 16, True, True, id="b2-t1024-crossover"),
+        pytest.param(4, 32, 16, True, True, id="b4-t512-crossover"),
+        pytest.param(4, 16, 16, True, False, id="b4-t256-below-crossover"),
+        pytest.param(4, 128, 16, False, False, id="fp32-boundaries-never-fuse"),
+    ],
+)
+def test_use_fused_state_decay_dot(
+    batch: int,
+    n_chunks: int,
+    heads: int,
+    compact_boundaries: bool,
+    expected: bool,
+) -> None:
+    assert _use_fused_state_decay_dot(batch, n_chunks, heads, compact_boundaries) is expected
+
+
 @pytest.mark.parametrize("shape", [(0, 16, 1, 128), (1, 16, 0, 128)])
 def test_compact_wy_rejects_empty_batch_or_heads(shape: tuple[int, ...]) -> None:
     batch, time, heads, dim = shape
@@ -161,9 +184,15 @@ def test_compact_wy_rejects_empty_batch_or_heads(shape: tuple[int, ...]) -> None
         )
 
 
-def _cuda_compact_case(time: int, dtype: torch.dtype, *, heads: int = 1):
+def _cuda_compact_inputs(
+    time: int,
+    dtype: torch.dtype,
+    *,
+    batch: int = 1,
+    heads: int = 1,
+):
     generator = torch.Generator(device="cuda").manual_seed(4_170 + time)
-    batch, dim = 1, 128
+    dim = 128
     shape = (batch, time, heads, dim)
     state_shape = (batch, heads, dim, dim)
     base = (
@@ -185,6 +214,11 @@ def _cuda_compact_case(time: int, dtype: torch.dtype, *, heads: int = 1):
     d_final_state = (
         torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.05
     )
+    return base, initial_state, do, d_final_state
+
+
+def _cuda_compact_case(time: int, dtype: torch.dtype, *, heads: int = 1):
+    base, initial_state, do, d_final_state = _cuda_compact_inputs(time, dtype, heads=heads)
     _, _, aux = chunk_forward(
         *base,
         initial_state,
@@ -423,6 +457,66 @@ def test_compact_wy_h16_t128_matches_reference() -> None:
     torch.cuda.synchronize()
 
     _assert_long_accuracy_contract(actual, expected)
+
+
+@pytest.mark.cuda
+@pytest.mark.slow
+@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
+def test_compact_wy_b4_t512_fused_state_dot_matches_reference() -> None:
+    batch, time, heads = 4, 512, 16
+    base, initial_state, do, d_final_state = _cuda_compact_inputs(
+        time,
+        torch.bfloat16,
+        batch=batch,
+        heads=heads,
+    )
+    _, _, aux = chunk_forward(
+        *base,
+        initial_state,
+        scale=0.125,
+        return_aux=True,
+    )
+    assert aux.state_boundaries.dtype == torch.bfloat16
+    boundary_aux = WYBoundaryAux(
+        aux.y,
+        aux.q_gamma,
+        aux.k_tail,
+        aux.decay_end,
+        aux.aqk,
+    )
+    dstate_boundaries, d_residual, exact_d_initial = wy_boundary_dstate(
+        boundary_aux,
+        do,
+        d_final_state,
+        return_d_residual=True,
+        compact_boundaries=True,
+    )
+    expected, _ = compact_wy_chunk_vjp_reference(
+        *base,
+        aux.state_boundaries,
+        dstate_boundaries,
+        aux,
+        do,
+        scale=0.125,
+        verify_boundaries=False,
+    )
+    actual = compact_wy_chunk_vjp_cute(
+        *base,
+        aux.state_boundaries,
+        dstate_boundaries,
+        aux,
+        do,
+        scale=0.125,
+        precomputed_d_residual=d_residual,
+        precomputed_d_initial_state=exact_d_initial,
+    )
+    torch.cuda.synchronize()
+
+    _assert_long_accuracy_contract(
+        (*actual[:-1], exact_d_initial),
+        (*expected[:-1], exact_d_initial),
+    )
+    torch.testing.assert_close(actual[-1], exact_d_initial, atol=0.0, rtol=0.0)
 
 
 @pytest.mark.cuda

@@ -346,9 +346,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 64, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 175.47199875116348, "minimum_us": 162.27200627326965},
-      "triton": {"implementation": "official-triton", "median_us": 399.58399534225464, "minimum_us": 385.43999195098877},
-      "speedup": 2.277195211692459, "validation_max_abs": 0.00244140625,
+      "cute": {"implementation": "cute-sm120", "median_us": 131.6159963607788, "minimum_us": 121.88799679279327},
+      "triton": {"implementation": "official-triton", "median_us": 278.9919972419739, "minimum_us": 271.807998418808},
+      "speedup": 2.119742318230193, "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -356,9 +356,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 128, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 126.43200159072876, "minimum_us": 118.68800222873688},
-      "triton": {"implementation": "official-triton", "median_us": 279.34399247169495, "minimum_us": 267.39200949668884},
-      "speedup": 2.2094405605944245, "validation_max_abs": 0.0020751953125,
+      "cute": {"implementation": "cute-sm120", "median_us": 126.56000256538391, "minimum_us": 117.8240031003952},
+      "triton": {"implementation": "official-triton", "median_us": 281.5040051937103, "minimum_us": 273.27999472618103},
+      "speedup": 2.2242730680119784, "validation_max_abs": 0.0020751953125,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -366,9 +366,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 256, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 134.5600038766861, "minimum_us": 126.39999389648438},
-      "triton": {"implementation": "official-triton", "median_us": 278.6720097064972, "minimum_us": 268.22400093078613},
-      "speedup": 2.0709869328026973, "validation_max_abs": 0.00244140625,
+      "cute": {"implementation": "cute-sm120", "median_us": 179.407998919487, "minimum_us": 165.15199840068817},
+      "triton": {"implementation": "official-triton", "median_us": 398.032009601593, "minimum_us": 381.53600692749023},
+      "speedup": 2.218585637200145, "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -376,9 +376,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 512, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 148.75199645757675, "minimum_us": 138.5280042886734},
-      "triton": {"implementation": "official-triton", "median_us": 283.9680016040802, "minimum_us": 277.15200185775757},
-      "speedup": 1.9090029604077705, "validation_max_abs": 0.0029296875,
+      "cute": {"implementation": "cute-sm120", "median_us": 172.12800681591034, "minimum_us": 162.23999857902527},
+      "triton": {"implementation": "official-triton", "median_us": 329.6000063419342, "minimum_us": 318.2399868965149},
+      "speedup": 1.9148540231133857, "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -386,9 +386,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 1024, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 299.1040050983429, "minimum_us": 289.0239953994751},
-      "triton": {"implementation": "official-triton", "median_us": 391.1040127277374, "minimum_us": 386.01601123809814},
-      "speedup": 1.3075853417581143, "validation_max_abs": 0.0029296875,
+      "cute": {"implementation": "cute-sm120", "median_us": 308.20800364017487, "minimum_us": 300.2240061759949},
+      "triton": {"implementation": "official-triton", "median_us": 394.27199959754944, "minimum_us": 387.1999979019165},
+      "speedup": 1.2792399773558514, "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -396,9 +396,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 2048, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 623.7120032310486, "minimum_us": 616.2559986114502},
-      "triton": {"implementation": "official-triton", "median_us": 708.6079716682434, "minimum_us": 694.271981716156},
-      "speedup": 1.1361140526355171, "validation_max_abs": 0.00390625,
+      "cute": {"implementation": "cute-sm120", "median_us": 638.975977897644, "minimum_us": 628.0320286750793},
+      "triton": {"implementation": "official-triton", "median_us": 704.4959962368011, "minimum_us": 689.1520023345947},
+      "speedup": 1.1025390947477098, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -446,9 +446,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 16, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":120.11199817061424,"minimum_us":112.64000087976456},
-      "triton": {"implementation":"official-triton","median_us":276.5600085258484,"minimum_us":263.45598697662354},
-      "speedup": 2.3025177562445185, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":119.19999867677689,"minimum_us":116.67200177907944},
+      "triton": {"implementation":"official-triton","median_us":273.6319899559021,"minimum_us":262.62399554252625},
+      "speedup": 2.295570411018909, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -456,9 +456,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 64, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":132.54399597644806,"minimum_us":129.50399518013},
-      "triton": {"implementation":"official-triton","median_us":279.83999252319336,"minimum_us":273.21600914001465},
-      "speedup": 2.1112988971067277, "validation_max_abs": 0.0029296875,
+      "cute": {"implementation":"cute-sm120","median_us":132.57600367069244,"minimum_us":125.34399330615997},
+      "triton": {"implementation":"official-triton","median_us":277.99999713897705,"minimum_us":264.8000121116638},
+      "speedup": 2.09691037172538, "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -466,9 +466,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 128, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":134.62400436401367,"minimum_us":124.09599870443344},
-      "triton": {"implementation":"official-triton","median_us":278.59199047088623,"minimum_us":269.1200077533722},
-      "speedup": 2.069407991442547, "validation_max_abs": 0.0029296875,
+      "cute": {"implementation":"cute-sm120","median_us":134.2719942331314,"minimum_us":123.9359974861145},
+      "triton": {"implementation":"official-triton","median_us":279.4560045003891,"minimum_us":269.82399821281433},
+      "speedup": 2.0812679970715275, "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -476,9 +476,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 256, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":147.87200093269348,"minimum_us":137.7280056476593},
-      "triton": {"implementation":"official-triton","median_us":282.6400101184845,"minimum_us":273.21600914001465},
-      "speedup": 1.9113828739433438, "validation_max_abs": 0.00244140625,
+      "cute": {"implementation":"cute-sm120","median_us":188.6880025267601,"minimum_us":178.75200510025024},
+      "triton": {"implementation":"official-triton","median_us":395.04000544548035,"minimum_us":379.13599610328674},
+      "speedup": 2.0936148570943454, "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -486,9 +486,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 512, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":293.95198822021484,"minimum_us":281.98400139808655},
-      "triton": {"implementation":"official-triton","median_us":390.23999869823456,"minimum_us":375.0720024108887},
-      "speedup": 1.3275637326388325, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":283.6480140686035,"minimum_us":277.0879864692688},
+      "triton": {"implementation":"official-triton","median_us":392.2719955444336,"minimum_us":380.8000087738037},
+      "speedup": 1.3829534355546664, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -496,9 +496,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 1024, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":698.6880004405975,"minimum_us":686.1760020256042},
-      "triton": {"implementation":"official-triton","median_us":720.8639979362488,"minimum_us":700.4799842834473},
-      "speedup": 1.0317394852661945, "validation_max_abs": 0.00244140625,
+      "cute": {"implementation":"cute-sm120","median_us":588.6879861354828,"minimum_us":576.5439867973328},
+      "triton": {"implementation":"official-triton","median_us":639.9199962615967,"minimum_us":625.4720091819763},
+      "speedup": 1.0870274429455116, "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -506,9 +506,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 2048, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":1278.4639596939087,"minimum_us":1256.160020828247},
-      "triton": {"implementation":"official-triton","median_us":1312.4639987945557,"minimum_us":1301.3759851455688},
-      "speedup": 1.0265944447184787, "validation_max_abs": 0.0029296875,
+      "cute": {"implementation":"cute-sm120","median_us":1256.4319968223572,"minimum_us":1243.1039810180664},
+      "triton": {"implementation":"official-triton","median_us":1309.6479773521423,"minimum_us":1298.4960079193115},
+      "speedup": 1.0423548434490475, "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -516,9 +516,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 4096, "heads": 16, "dtype": "bf16",
       "warmup": 20, "repeats": 100,
-      "cute": {"implementation":"cute-sm120","median_us":2761.631965637207,"minimum_us":2730.88002204895},
-      "triton": {"implementation":"official-triton","median_us":2819.5199966430664,"minimum_us":2810.8479976654053},
-      "speedup": 1.0209615298946986, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":2742.751955986023,"minimum_us":2688.8959407806396},
+      "triton": {"implementation":"official-triton","median_us":2816.0319328308105,"minimum_us":2719.615936279297},
+      "speedup": 1.0267176828312363, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -526,9 +526,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 8192, "heads": 16, "dtype": "bf16",
       "warmup": 20, "repeats": 100,
-      "cute": {"implementation":"cute-sm120","median_us":5640.383958816528,"minimum_us":5571.904182434082},
-      "triton": {"implementation":"official-triton","median_us":5723.26397895813,"minimum_us":5707.808017730713},
-      "speedup": 1.0146940386943075, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":5582.720041275024,"minimum_us":5528.223991394043},
+      "triton": {"implementation":"official-triton","median_us":5675.567865371704,"minimum_us":5663.328170776367},
+      "speedup": 1.0166312878686774, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -536,9 +536,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 16384, "heads": 16, "dtype": "bf16",
       "warmup": 10, "repeats": 50,
-      "cute": {"implementation":"cute-sm120","median_us":11501.408100128174,"minimum_us":11377.471923828125},
-      "triton": {"implementation":"official-triton","median_us":11405.776023864746,"minimum_us":11376.57642364502},
-      "speedup": 0.9916851853763573, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":11298.351764678955,"minimum_us":11225.728034973145},
+      "triton": {"implementation":"official-triton","median_us":11393.648147583008,"minimum_us":11370.400428771973},
+      "speedup": 1.0084345384963114, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -546,9 +546,9 @@
     {
       "mode": "chunk-backward", "batch": 2, "time": 32768, "heads": 16, "dtype": "bf16",
       "warmup": 10, "repeats": 50,
-      "cute": {"implementation":"cute-sm120","median_us":24403.82480621338,"minimum_us":24010.43128967285},
-      "triton": {"implementation":"official-triton","median_us":23002.27165222168,"minimum_us":22972.671508789062},
-      "speedup": 0.9425682996365858, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":22679.79145050049,"minimum_us":22604.8641204834},
+      "triton": {"implementation":"official-triton","median_us":22951.7765045166,"minimum_us":22913.087844848633},
+      "speedup": 1.0119923966060151, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -556,9 +556,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 16, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":149.9519944190979,"minimum_us":140.79999923706055},
-      "triton": {"implementation":"official-triton","median_us":275.9679853916168,"minimum_us":269.3119943141937},
-      "speedup": 1.8403755579290215, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":149.80799704790115,"minimum_us":146.7839926481247},
+      "triton": {"implementation":"official-triton","median_us":279.58399057388306,"minimum_us":271.64798974990845},
+      "speedup": 1.8662821483721326, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -566,9 +566,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 64, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":142.89599657058716,"minimum_us":132.03200697898865},
-      "triton": {"implementation":"official-triton","median_us":277.3599922657013,"minimum_us":267.61600375175476},
-      "speedup": 1.9409920426195577, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":142.71999895572662,"minimum_us":134.24000144004822},
+      "triton": {"implementation":"official-triton","median_us":276.91200375556946,"minimum_us":263.5200023651123},
+      "speedup": 1.9402466772822127, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -576,9 +576,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 128, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":189.95200097560883,"minimum_us":182.6239973306656},
-      "triton": {"implementation":"official-triton","median_us":397.1039950847626,"minimum_us":382.7199935913086},
-      "speedup": 2.090549154761226, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":148.03199470043182,"minimum_us":138.047993183136},
+      "triton": {"implementation":"official-triton","median_us":282.7039957046509,"minimum_us":275.2000093460083},
+      "speedup": 1.909749282759791, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -586,9 +586,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 256, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":295.72799801826477,"minimum_us":283.7119996547699},
-      "triton": {"implementation":"official-triton","median_us":392.2239989042282,"minimum_us":373.9520013332367},
-      "speedup": 1.3262998482815402, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":271.42399549484253,"minimum_us":264.16000723838806},
+      "triton": {"implementation":"official-triton","median_us":392.14399456977844,"minimum_us":381.02400302886963},
+      "speedup": 1.4447653894964116, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -596,9 +596,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 512, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":666.6560173034668,"minimum_us":658.5279703140259},
-      "triton": {"implementation":"official-triton","median_us":622.4479973316193,"minimum_us":609.1520190238953},
-      "speedup": 0.9336869107539703, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":577.10400223732,"minimum_us":565.9520030021667},
+      "triton": {"implementation":"official-triton","median_us":620.0959980487823,"minimum_us":605.0879955291748},
+      "speedup": 1.0744960971415738, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -606,9 +606,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 1024, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":1342.4639701843262,"minimum_us":1336.0639810562134},
-      "triton": {"implementation":"official-triton","median_us":1248.2720017433167,"minimum_us":1235.9999418258667},
-      "speedup": 0.9298365017363732, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":1256.1120390892029,"minimum_us":1240.224003791809},
+      "triton": {"implementation":"official-triton","median_us":1303.104043006897,"minimum_us":1290.112018585205},
+      "speedup": 1.0374106787096538, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -616,9 +616,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 2048, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation":"cute-sm120","median_us":2763.8399600982666,"minimum_us":2726.815938949585},
-      "triton": {"implementation":"official-triton","median_us":2714.959979057312,"minimum_us":2645.9200382232666},
-      "speedup": 0.9823144676440612, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":2654.512047767639,"minimum_us":2587.615966796875},
+      "triton": {"implementation":"official-triton","median_us":2716.671943664551,"minimum_us":2702.239990234375},
+      "speedup": 1.0234166938323697, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -626,9 +626,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 4096, "heads": 16, "dtype": "bf16",
       "warmup": 20, "repeats": 100,
-      "cute": {"implementation":"cute-sm120","median_us":5705.312013626099,"minimum_us":5639.071941375732},
-      "triton": {"implementation":"official-triton","median_us":5466.591835021973,"minimum_us":5447.904109954834},
-      "speedup": 0.9581582605764617, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":5444.000005722046,"minimum_us":5394.08016204834},
+      "triton": {"implementation":"official-triton","median_us":5515.968084335327,"minimum_us":5449.376106262207},
+      "speedup": 1.013219705829838, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -636,9 +636,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 8192, "heads": 16, "dtype": "bf16",
       "warmup": 20, "repeats": 100,
-      "cute": {"implementation":"cute-sm120","median_us":12195.760250091553,"minimum_us":11879.45556640625},
-      "triton": {"implementation":"official-triton","median_us":10948.463916778564,"minimum_us":10895.936012268066},
-      "speedup": 0.8977270536862493, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":10921.184062957764,"minimum_us":10878.8480758667},
+      "triton": {"implementation":"official-triton","median_us":10945.93620300293,"minimum_us":10891.263961791992},
+      "speedup": 1.002266433740378, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
@@ -646,19 +646,9 @@
     {
       "mode": "chunk-backward", "batch": 4, "time": 16384, "heads": 16, "dtype": "bf16",
       "warmup": 10, "repeats": 50,
-      "cute": {"implementation":"cute-sm120","median_us":26170.78399658203,"minimum_us":25771.839141845703},
-      "triton": {"implementation":"official-triton","median_us":22133.968353271484,"minimum_us":22098.2723236084},
-      "speedup": 0.8457510618009088, "validation_max_abs": 0.00390625,
-      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
-      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
-      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"
-    },
-    {
-      "mode": "chunk-backward", "batch": 4, "time": 32768, "heads": 16, "dtype": "bf16",
-      "warmup": 10, "repeats": 50,
-      "cute": {"implementation":"cute-sm120","median_us":65718.19305419922,"minimum_us":65341.53747558594},
-      "triton": {"implementation":"official-triton","median_us":43955.360412597656,"minimum_us":43899.55139160156},
-      "speedup": 0.6688461500508195, "validation_max_abs": 0.00390625,
+      "cute": {"implementation":"cute-sm120","median_us":21906.1279296875,"minimum_us":21847.39112854004},
+      "triton": {"implementation":"official-triton","median_us":22145.824432373047,"minimum_us":22116.22428894043},
+      "speedup": 1.010941984062857, "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"

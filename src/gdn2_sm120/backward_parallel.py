@@ -56,6 +56,15 @@ _BOUNDARY_VALUE_TILE = _BOUNDARY_WARPS
 _BOUNDARY_MMA_WARPS = _DIM // 16
 _BOUNDARY_MMA_THREADS = 32 * _BOUNDARY_MMA_WARPS
 _BOUNDARY_MMA_VALUE_TILE = 8
+_BOUNDARY_MMA_WIDE_VALUE_TILE = 16
+# V8 exposes sixteen independent value CTAs per (batch, head), while V16
+# halves duplicated Y/Q-gamma/K-tail reads.  A B1/H16 grid benefits from V16
+# through T=2048, but long serial CTAs underfill the 188-SM target from T=4096
+# onward.  Two batches provide enough independent scans to retain V16 at all
+# measured sequence lengths.
+_BOUNDARY_MMA_MIDRANGE_MIN_BATCH_HEADS = 16
+_BOUNDARY_MMA_MIDRANGE_MAX_TIME = 2048
+_BOUNDARY_MMA_WIDE_MIN_BATCH_HEADS = 32
 _AQK_PRECOMPUTE_WARPS = 8
 _AQK_PRECOMPUTE_THREADS = 32 * _AQK_PRECOMPUTE_WARPS
 _AQK_PRECOMPUTE_VALUES = _AQK_PRECOMPUTE_WARPS * _BOUNDARY_MMA_VALUE_TILE
@@ -73,6 +82,20 @@ _FULL_SMEM_BYTES = (_DIM * _DIM + 4 * _FULL_WARPS * _DIM + _FULL_KEY_FIELDS * _D
 # once chunk/head parallelism fills most of the 188-SM target; otherwise
 # retain value tiling.
 _FULL_MIN_CTAS = 384
+
+
+def _select_boundary_mma_value_tile(batch: int, time: int, heads: int) -> int:
+    """Choose V16 for filled grids and for the measured B1 midrange window."""
+
+    batch_heads = batch * heads
+    if batch_heads >= _BOUNDARY_MMA_WIDE_MIN_BATCH_HEADS:
+        return _BOUNDARY_MMA_WIDE_VALUE_TILE
+    if (
+        batch_heads >= _BOUNDARY_MMA_MIDRANGE_MIN_BATCH_HEADS
+        and time <= _BOUNDARY_MMA_MIDRANGE_MAX_TIME
+    ):
+        return _BOUNDARY_MMA_WIDE_VALUE_TILE
+    return _BOUNDARY_MMA_VALUE_TILE
 
 
 @dataclass(frozen=True)
@@ -702,6 +725,7 @@ def _wy_boundary_dstate_mma_kernel(
     heads: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     store_d_initial_state: cutlass.Constexpr,
+    value_tile_size: cutlass.Constexpr,
     tiled_mma: cute.TiledMma,
     s_a_layout: cute.Layout,
     s_state_layout: cute.Layout,
@@ -714,7 +738,7 @@ def _wy_boundary_dstate_mma_kernel(
     block, _, _ = cute.arch.block_idx()
     lane = tidx & 31
     warp = tidx >> 5
-    value_tiles = _DIM // _BOUNDARY_MMA_VALUE_TILE
+    value_tiles = _DIM // value_tile_size
     value_tile = block % value_tiles
     batch_head = block // value_tiles
     head = batch_head % heads
@@ -739,7 +763,7 @@ def _wy_boundary_dstate_mma_kernel(
     s_partial = s_partial_all[warp, None, None]
     s_state_as_b = cute.make_tensor(
         s_state.iterator,
-        cute.make_layout((_BOUNDARY_MMA_VALUE_TILE, 16), stride=(1, 8)),
+        cute.make_layout((value_tile_size, 16), stride=(1, value_tile_size)),
     )
     s_q_as_a = cute.make_tensor(
         s_q.iterator,
@@ -805,7 +829,7 @@ def _wy_boundary_dstate_mma_kernel(
 
     g_final = cute.local_tile(
         d_final_state[batch, head, None, None],
-        (16, _BOUNDARY_MMA_VALUE_TILE),
+        (16, value_tile_size),
         (warp, value_tile),
     )
     t_cg_final = thr_mma.partition_C(g_final)
@@ -813,7 +837,7 @@ def _wy_boundary_dstate_mma_kernel(
     cute.autovec_copy(t_cg_final, t_cr_state)
     g_boundary = cute.local_tile(
         boundaries[batch, n_chunks, head, None, None],
-        (16, _BOUNDARY_MMA_VALUE_TILE),
+        (16, value_tile_size),
         (warp, value_tile),
     )
     t_cg_boundary = thr_mma.partition_C(g_boundary)
@@ -823,7 +847,7 @@ def _wy_boundary_dstate_mma_kernel(
         t_cr_boundary = cute.make_fragment_like(t_cr_state, boundaries.element_type)
         t_cr_boundary[None] = t_cr_state.load().to(boundaries.element_type)
         cute.autovec_copy(t_cr_boundary, t_cg_boundary)
-    state_identity = cute.make_identity_tensor((16, _BOUNDARY_MMA_VALUE_TILE))
+    state_identity = cute.make_identity_tensor((16, value_tile_size))
     t_cp_state = thr_mma.partition_C(state_identity)
 
     if cutlass.const_expr(y.element_type == operand_type):
@@ -946,10 +970,10 @@ def _wy_boundary_dstate_mma_kernel(
         cute.autovec_copy(t_cr_partial, t_cs_partial)
         cute.arch.sync_threads()
 
-        if tidx < _CHUNK_SIZE * _BOUNDARY_MMA_VALUE_TILE:
-            row = tidx // _BOUNDARY_MMA_VALUE_TILE
-            value_local = tidx - row * _BOUNDARY_MMA_VALUE_TILE
-            value_idx = value_tile * _BOUNDARY_MMA_VALUE_TILE + value_local
+        if tidx < _CHUNK_SIZE * value_tile_size:
+            row = tidx // value_tile_size
+            value_local = tidx - row * value_tile_size
+            value_idx = value_tile * value_tile_size + value_local
             total = cutlass.Float32(0.0)
             for source_warp in cutlass.range_constexpr(_BOUNDARY_MMA_WARPS):
                 total += s_partial_all[source_warp, row, value_local]
@@ -991,7 +1015,7 @@ def _wy_boundary_dstate_mma_kernel(
         )
         g_boundary = cute.local_tile(
             boundaries[batch, chunk, head, None, None],
-            (16, _BOUNDARY_MMA_VALUE_TILE),
+            (16, value_tile_size),
             (warp, value_tile),
         )
         t_cg_boundary = thr_mma.partition_C(g_boundary)
@@ -1005,7 +1029,7 @@ def _wy_boundary_dstate_mma_kernel(
     if cutlass.const_expr(store_d_initial_state):
         g_initial = cute.local_tile(
             d_initial_state[batch, head, None, None],
-            (16, _BOUNDARY_MMA_VALUE_TILE),
+            (16, value_tile_size),
             (warp, value_tile),
         )
         cute.autovec_copy(t_cr_state, thr_mma.partition_C(g_initial))
@@ -1433,6 +1457,7 @@ def _launch_wy_boundary_dstate_mma(
     heads: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     store_d_initial_state: cutlass.Constexpr,
+    value_tile_size: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
     precompute_a_layout = cute.make_layout((_CHUNK_SIZE, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
@@ -1445,10 +1470,10 @@ def _launch_wy_boundary_dstate_mma(
         stride=(_CHUNK_SIZE * 16, 16, 1),
     )
     s_state_layout = cute.make_layout(
-        (_BOUNDARY_MMA_WARPS, 16, _BOUNDARY_MMA_VALUE_TILE),
-        stride=(16 * _BOUNDARY_MMA_VALUE_TILE, _BOUNDARY_MMA_VALUE_TILE, 1),
+        (_BOUNDARY_MMA_WARPS, 16, value_tile_size),
+        stride=(16 * value_tile_size, value_tile_size, 1),
     )
-    s_b_layout = cute.make_layout((_BOUNDARY_MMA_VALUE_TILE, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
+    s_b_layout = cute.make_layout((value_tile_size, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
     tiled_mma = cute.make_tiled_mma(
         cute.nvgpu.warp.MmaF16BF16Op(do.element_type, cutlass.Float32, (16, 8, 16)),
         (1, 1, 1),
@@ -1488,13 +1513,14 @@ def _launch_wy_boundary_dstate_mma(
         heads,
         store_d_residual,
         store_d_initial_state,
+        value_tile_size,
         tiled_mma,
         s_a_layout,
         s_state_layout,
         s_state_layout,
         s_b_layout,
     ).launch(
-        grid=(y.shape[0] * heads * (_DIM // _BOUNDARY_MMA_VALUE_TILE), 1, 1),
+        grid=(y.shape[0] * heads * (_DIM // value_tile_size), 1, 1),
         block=(_BOUNDARY_MMA_THREADS, 1, 1),
         stream=stream,
     )
@@ -1517,6 +1543,7 @@ def _launch_wy_boundary_dstate_mma_compact(
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
+    value_tile_size: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
     """Distinct trace entry for low-precision boundary checkpoint storage."""
@@ -1538,6 +1565,7 @@ def _launch_wy_boundary_dstate_mma_compact(
         heads,
         store_d_residual,
         True,
+        value_tile_size,
         stream,
     )
 
@@ -1721,6 +1749,7 @@ def _compile_wy_boundary_dstate_mma(
     input_dtype,
     aux_dtype,
     store_d_residual: bool,
+    value_tile_size: int,
 ):
     from cutlass.cute.runtime import make_fake_stream
 
@@ -1751,6 +1780,7 @@ def _compile_wy_boundary_dstate_mma(
         heads,
         store_d_residual,
         False,
+        value_tile_size,
         make_fake_stream(),
         options="--enable-tvm-ffi",
     )
@@ -1765,6 +1795,7 @@ def _compile_wy_boundary_dstate_mma_compact(
     input_dtype,
     aux_dtype,
     store_d_residual: bool,
+    value_tile_size: int,
 ):
     from cutlass.cute.runtime import make_fake_stream
 
@@ -1797,6 +1828,7 @@ def _compile_wy_boundary_dstate_mma_compact(
         n_chunks,
         heads,
         store_d_residual,
+        value_tile_size,
         make_fake_stream(),
         options="--enable-tvm-ffi",
     )
@@ -1998,6 +2030,7 @@ def wy_boundary_dstate(
         raise RuntimeError("do must have a concrete CUDA device index")
     with torch.cuda.device(do.device):
         if use_mma:
+            value_tile_size = _select_boundary_mma_value_tile(batch, time, heads)
             compile_boundary = (
                 _compile_wy_boundary_dstate_mma_compact
                 if compact_boundaries
@@ -2011,6 +2044,7 @@ def wy_boundary_dstate(
                 input_dtype,
                 aux_dtype,
                 return_d_residual,
+                value_tile_size,
             )
         else:
             compiled = _compile_wy_boundary_dstate(

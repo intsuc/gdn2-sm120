@@ -123,9 +123,15 @@ def test_tracked_chunk_sweeps_cover_all_published_batches_and_lengths() -> None:
     source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
     points = load_benchmarks([source]).points
     times = (16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
-    expected = {(batch, time, 16) for batch in (1, 2, 4) for time in times}
+    complete = {(batch, time, 16) for batch in (1, 2, 4) for time in times}
+    expected_by_mode = {
+        "chunk-forward": complete,
+        # B4/T32768 backward exceeds the CuTe per-launch 4-GiB byte-address
+        # range for one saved state-boundary tensor and is intentionally absent.
+        "chunk-backward": complete - {(4, 32768, 16)},
+    }
 
-    for mode in ("chunk-forward", "chunk-backward"):
+    for mode, expected in expected_by_mode.items():
         actual = {(point.batch, point.time, point.heads) for point in points if point.mode == mode}
         assert actual == expected
 

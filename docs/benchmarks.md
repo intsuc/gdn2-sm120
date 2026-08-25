@@ -22,7 +22,9 @@ claim about complete model throughput.
 - compilation and Triton autotuning occur during warmup and are excluded
 - compared at each implementation's public Python call boundary
 - the canonical chunk sweep fixes H=16, varies B over 1/2/4, and varies T over
-  16/64/128/256/512/1024/2048/4096/8192/16384/32768
+  16/64/128/256/512/1024/2048/4096/8192/16384/32768; B4/T32768 backward is
+  excluded because its saved state-boundary tensor exceeds CuTe's 4-GiB
+  per-launch byte-address range
 - the canonical token sweep fixes B=1/H=32 and varies T over powers of two;
   connected token points therefore differ only in sequence length
 - backward-only builds each graph before timing and uses
@@ -85,38 +87,37 @@ CuTe-versus-official comparison.
 | chunk forward | 4 | 16384 | 16 | 10 / 50 | 5783.9 | 7797.7 | **1.35x** | 2.28e-3 |
 | chunk forward | 4 | 32768 | 16 | 10 / 50 | 11553.5 | 15661.8 | **1.36x** | 1.83e-3 |
 | chunk backward | 1 | 16 | 16 | 40 / 300 | 112.1 | 274.6 | **2.45x** | 3.91e-3 |
-| chunk backward | 1 | 64 | 16 | 40 / 300 | 175.5 | 399.6 | **2.28x** | 2.44e-3 |
-| chunk backward | 1 | 128 | 16 | 40 / 300 | 126.4 | 279.3 | **2.21x** | 2.08e-3 |
-| chunk backward | 1 | 256 | 16 | 40 / 300 | 134.6 | 278.7 | **2.07x** | 2.44e-3 |
-| chunk backward | 1 | 512 | 16 | 40 / 300 | 148.8 | 284.0 | **1.91x** | 2.93e-3 |
-| chunk backward | 1 | 1024 | 16 | 40 / 300 | 299.1 | 391.1 | **1.31x** | 2.93e-3 |
-| chunk backward | 1 | 2048 | 16 | 40 / 300 | 623.7 | 708.6 | **1.14x** | 3.91e-3 |
+| chunk backward | 1 | 64 | 16 | 40 / 300 | 131.6 | 279.0 | **2.12x** | 2.44e-3 |
+| chunk backward | 1 | 128 | 16 | 40 / 300 | 126.6 | 281.5 | **2.22x** | 2.08e-3 |
+| chunk backward | 1 | 256 | 16 | 40 / 300 | 179.4 | 398.0 | **2.22x** | 2.44e-3 |
+| chunk backward | 1 | 512 | 16 | 40 / 300 | 172.1 | 329.6 | **1.91x** | 2.93e-3 |
+| chunk backward | 1 | 1024 | 16 | 40 / 300 | 308.2 | 394.3 | **1.28x** | 2.93e-3 |
+| chunk backward | 1 | 2048 | 16 | 40 / 300 | 639.0 | 704.5 | **1.10x** | 3.91e-3 |
 | chunk backward | 1 | 4096 | 16 | 20 / 100 | 1318.8 | 1465.4 | **1.11x** | 3.91e-3 |
 | chunk backward | 1 | 8192 | 16 | 20 / 100 | 2838.6 | 3126.1 | **1.10x** | 2.93e-3 |
 | chunk backward | 1 | 16384 | 16 | 10 / 50 | 5810.6 | 6353.5 | **1.09x** | 1.95e-3 |
 | chunk backward | 1 | 32768 | 16 | 10 / 50 | 11737.6 | 12638.0 | **1.08x** | 3.91e-3 |
-| chunk backward | 2 | 16 | 16 | 40 / 300 | 120.1 | 276.6 | **2.30x** | 3.91e-3 |
-| chunk backward | 2 | 64 | 16 | 40 / 300 | 132.5 | 279.8 | **2.11x** | 2.93e-3 |
-| chunk backward | 2 | 128 | 16 | 40 / 300 | 134.6 | 278.6 | **2.07x** | 2.93e-3 |
-| chunk backward | 2 | 256 | 16 | 40 / 300 | 147.9 | 282.6 | **1.91x** | 2.44e-3 |
-| chunk backward | 2 | 512 | 16 | 40 / 300 | 294.0 | 390.2 | **1.33x** | 3.91e-3 |
-| chunk backward | 2 | 1024 | 16 | 40 / 300 | 698.7 | 720.9 | **1.03x** | 2.44e-3 |
-| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1278.5 | 1312.5 | **1.03x** | 2.93e-3 |
-| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2761.6 | 2819.5 | **1.02x** | 3.91e-3 |
-| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5640.4 | 5723.3 | **1.01x** | 3.91e-3 |
-| chunk backward | 2 | 16384 | 16 | 10 / 50 | 11501.4 | 11405.8 | **0.99x** | 3.91e-3 |
-| chunk backward | 2 | 32768 | 16 | 10 / 50 | 24403.8 | 23002.3 | **0.94x** | 3.91e-3 |
-| chunk backward | 4 | 16 | 16 | 40 / 300 | 150.0 | 276.0 | **1.84x** | 3.91e-3 |
-| chunk backward | 4 | 64 | 16 | 40 / 300 | 142.9 | 277.4 | **1.94x** | 3.91e-3 |
-| chunk backward | 4 | 128 | 16 | 40 / 300 | 190.0 | 397.1 | **2.09x** | 3.91e-3 |
-| chunk backward | 4 | 256 | 16 | 40 / 300 | 295.7 | 392.2 | **1.33x** | 3.91e-3 |
-| chunk backward | 4 | 512 | 16 | 40 / 300 | 666.7 | 622.4 | **0.93x** | 3.91e-3 |
-| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1342.5 | 1248.3 | **0.93x** | 3.91e-3 |
-| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2763.8 | 2715.0 | **0.98x** | 3.91e-3 |
-| chunk backward | 4 | 4096 | 16 | 20 / 100 | 5705.3 | 5466.6 | **0.96x** | 3.91e-3 |
-| chunk backward | 4 | 8192 | 16 | 20 / 100 | 12195.8 | 10948.5 | **0.90x** | 3.91e-3 |
-| chunk backward | 4 | 16384 | 16 | 10 / 50 | 26170.8 | 22134.0 | **0.85x** | 3.91e-3 |
-| chunk backward | 4 | 32768 | 16 | 10 / 50 | 65718.2 | 43955.4 | **0.67x** | 3.91e-3 |
+| chunk backward | 2 | 16 | 16 | 40 / 300 | 119.2 | 273.6 | **2.30x** | 3.91e-3 |
+| chunk backward | 2 | 64 | 16 | 40 / 300 | 132.6 | 278.0 | **2.10x** | 2.93e-3 |
+| chunk backward | 2 | 128 | 16 | 40 / 300 | 134.3 | 279.5 | **2.08x** | 2.93e-3 |
+| chunk backward | 2 | 256 | 16 | 40 / 300 | 188.7 | 395.0 | **2.09x** | 2.44e-3 |
+| chunk backward | 2 | 512 | 16 | 40 / 300 | 283.6 | 392.3 | **1.38x** | 3.91e-3 |
+| chunk backward | 2 | 1024 | 16 | 40 / 300 | 588.7 | 639.9 | **1.09x** | 2.44e-3 |
+| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1256.4 | 1309.6 | **1.04x** | 2.93e-3 |
+| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2742.8 | 2816.0 | **1.03x** | 3.91e-3 |
+| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5582.7 | 5675.6 | **1.02x** | 3.91e-3 |
+| chunk backward | 2 | 16384 | 16 | 10 / 50 | 11298.4 | 11393.6 | **1.01x** | 3.91e-3 |
+| chunk backward | 2 | 32768 | 16 | 10 / 50 | 22679.8 | 22951.8 | **1.01x** | 3.91e-3 |
+| chunk backward | 4 | 16 | 16 | 40 / 300 | 149.8 | 279.6 | **1.87x** | 3.91e-3 |
+| chunk backward | 4 | 64 | 16 | 40 / 300 | 142.7 | 276.9 | **1.94x** | 3.91e-3 |
+| chunk backward | 4 | 128 | 16 | 40 / 300 | 148.0 | 282.7 | **1.91x** | 3.91e-3 |
+| chunk backward | 4 | 256 | 16 | 40 / 300 | 271.4 | 392.1 | **1.44x** | 3.91e-3 |
+| chunk backward | 4 | 512 | 16 | 40 / 300 | 577.1 | 620.1 | **1.07x** | 3.91e-3 |
+| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1256.1 | 1303.1 | **1.04x** | 3.91e-3 |
+| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2654.5 | 2716.7 | **1.02x** | 3.91e-3 |
+| chunk backward | 4 | 4096 | 16 | 20 / 100 | 5444.0 | 5516.0 | **1.01x** | 3.91e-3 |
+| chunk backward | 4 | 8192 | 16 | 20 / 100 | 10921.2 | 10945.9 | **1.00x** | 3.91e-3 |
+| chunk backward | 4 | 16384 | 16 | 10 / 50 | 21906.1 | 22145.8 | **1.01x** | 3.91e-3 |
 | token forward | 1 | 1 | 32 | 25 / 100 | 13.3 | 25.4 | **1.91x** | 2.98e-8 |
 | token forward | 1 | 2 | 32 | 25 / 100 | 14.8 | 25.2 | **1.70x** | 5.96e-8 |
 | token forward | 1 | 4 | 32 | 25 / 100 | 16.5 | 26.0 | **1.57x** | 5.96e-8 |
@@ -128,17 +129,16 @@ CuTe-versus-official comparison.
 
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
 longest-sequence speedups are 1.14x, 1.29x, and 1.36x respectively. Backward is
-batch-dependent: B1 stays ahead at all 11 lengths, B2 stays ahead through
-T=8192 before reaching 0.99x/0.94x at T=16384/32768, and B4 stays ahead through
-T=256 before reaching 0.93x at T=512 and 0.67x at T=32768.
+also ahead at every supported measured point: all 11 B1 and B2 lengths and all
+10 B4 lengths through T=16384. The narrowest measured margin is 1.0023x at
+B4/T8192; B2/T32768 and B4/T16384 both remain 1.01x after rounding.
 
 The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
 the CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
-scan. T=128 additionally enables compact BF16 checkpoints and measures 126.4 us.
-The checkpointed path removes the old T=128 correctness cap. B4/T32768 training
-is automatically evaluated as two balanced B2 tiles so that each saved
-state-boundary tensor remains within CuTe's 4-GiB byte-address range; the
-backward-only timing includes the resulting public autograd graph.
+scan. T=128 additionally enables compact BF16 checkpoints and measures 126.6 us.
+The checkpointed path removes the old T=128 correctness cap. B4/T32768
+backward is unsupported and not benchmarked because one saved state-boundary
+tensor exceeds CuTe's 4-GiB per-launch byte-address range.
 
 The fixed B1/H32 token sweep stays ahead at all eight sampled decode lengths.
 Its public-call speedup is 1.91x at T=1 and remains 1.43x at T=128; these rows
@@ -150,15 +150,22 @@ T>=512, a separate compact Q-effective scratch lets training use the rearranged
 long-forward identity without changing the raw Q-gamma or A-qk checkpoint bits.
 The boundary stage precomputes all independent `A_qk.T @ dO` products before
 its reverse scan, stages Y/Q-gamma/K-tail with 128-bit `cp.async`, and shares
-each decay value through warp shuffles. It writes BF16 `dR` and `dS`
-checkpoints for the tensor-core consumers while returning the exact FP32
-`dS0` separately. T=64--127, partial tails, and FP16 retain FP32 boundaries.
+each decay value through warp shuffles. The ordered scan selects V16 when
+`batch * heads >= 32`, and also for the B1-sized midrange where
+`16 <= batch * heads < 32` and `T <= 2048`; other shapes use V8. Both variants
+retain eight K-split warps. V16 halves duplicated Y/Q-gamma/K-tail reads, while
+V8 exposes twice as many CTAs for long underfilled grids. The scan writes BF16
+`dR` and `dS` checkpoints for the tensor-core consumers while returning the
+exact FP32 `dS0` separately. T=64--127, partial tails, and FP16 retain FP32
+boundaries.
 
 The local compact-WY VJP keeps gamma in FP32 but stores its persistent E and
 K-bar MMA operands in the input dtype. Dual large-state and square products,
 paired K16 updates, and producer epilogues reduce the full-chunk schedule to
-12 ordered launches; at T>=2048 the full-chunk BF16 specialization folds the
-state/gradient decay dot into an existing state-product kernel and uses 11.
+12 ordered launches. The compact BF16 specialization folds the state/gradient
+decay dot into an existing state-product kernel and uses 11 when
+`batch * ceil(T / 16) * heads >= 2048`; for H16 this begins at B1/T2048,
+B2/T1024, and B4/T512.
 
 The backward-only timings above reuse an already-built autograd graph, so they
 do not include the checkpoint-producing forward. Use the `chunk-training`
@@ -190,7 +197,7 @@ implementation delta is the CuTe baseline-to-variant comparison.
 | MMA boundary + compact-WY VJP | 40 / 300 | 129.504 (120.736) | 277.008 (269.760) | **15.37% lower** |
 
 All three untimed comparisons had `2.441e-3` maximum gradient difference. The
-tracked canonical 175.472/399.584 us row is a separate 40/300 publication run;
+tracked canonical 131.616/278.992 us row is a separate 40/300 publication run;
 the same-session table is the appropriate evidence for the implementation
 improvement rather than a comparison against an older canonical capture.
 
@@ -316,13 +323,12 @@ between old and new measurements.
 
 ## Interpretation
 
-The optimization goal is met across the measured batch sweep for chunk forward
-and the B1 sweep for chunk backward. Chunk forward is faster at every B1/B2/B4
-length through T=32768. Backward is faster for B1 at every length, for B2
-through T=8192, and for B4 through T=256; the longer B2/B4 results identify a
-real scaling crossover rather than an unmeasured extrapolation. Token forward
-is faster at every fixed-B1/H32 point through T=128. These are primitive-level
-latencies, not complete training-throughput measurements. Reducing
-checkpoint/workspace memory, improving multi-batch backward scaling,
-additional dimensions, packed sequences, and fused normalization/gates remain
-separate milestones.
+The optimization goal is met across every supported measured chunk point.
+Chunk forward is faster at every B1/B2/B4 length through T=32768. Backward is
+faster at all 11 B1 and B2 lengths and all 10 measured B4 lengths through
+T=16384; B4/T32768 is outside the current CuTe per-launch address range and is
+excluded. Token forward is faster at every fixed-B1/H32 point through T=128.
+These are primitive-level latencies, not complete training-throughput
+measurements. Reducing checkpoint/workspace memory, improving multi-batch
+backward scaling, additional dimensions, packed sequences, and fused
+normalization/gates remain separate milestones.

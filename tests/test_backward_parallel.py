@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from gdn2_sm120.backward_parallel import (
+    _select_boundary_mma_value_tile,
     boundary_dstate_token_reference,
     boundary_dstate_wy_reference,
     build_wy_boundary_aux_reference,
@@ -112,6 +113,13 @@ def test_independent_chunk_vjps_match_full_autograd() -> None:
 
 def _sm120_available() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() == (12, 0)
+
+
+def test_boundary_mma_value_tile_is_shape_dependent() -> None:
+    assert _select_boundary_mma_value_tile(1, 2048, 16) == 16
+    assert _select_boundary_mma_value_tile(1, 4096, 16) == 8
+    assert _select_boundary_mma_value_tile(2, 32768, 16) == 16
+    assert _select_boundary_mma_value_tile(4, 16384, 16) == 16
 
 
 @pytest.mark.cuda
@@ -353,6 +361,106 @@ def test_cute_mma_boundary_scan_matches_reference(
             atol=4e-3,
             rtol=3e-3,
         )
+
+
+@pytest.mark.cuda
+@pytest.mark.slow
+@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
+@pytest.mark.parametrize(
+    ("batch", "time", "dtype"),
+    [
+        (1, 128, torch.bfloat16),
+        (1, 128, torch.float16),
+        (1, 512, torch.bfloat16),
+        (2, 64, torch.bfloat16),
+        (2, 128, torch.bfloat16),
+        (2, 512, torch.bfloat16),
+        (4, 64, torch.bfloat16),
+        (4, 128, torch.bfloat16),
+        (4, 512, torch.bfloat16),
+    ],
+    ids=[
+        "b1-t128-bf16",
+        "b1-t128-fp16",
+        "b1-t512",
+        "b2-t64",
+        "b2-t128",
+        "b2-t512",
+        "b4-t64",
+        "b4-t128",
+        "b4-t512",
+    ],
+)
+def test_cute_wide_mma_boundary_scan_matches_reference(
+    batch: int,
+    time: int,
+    dtype: torch.dtype,
+) -> None:
+    generator = torch.Generator(device="cuda").manual_seed(32_000 + batch * 1_000 + time)
+    heads, dim = 16, 128
+    shape = (batch, time, heads, dim)
+    state_shape = (batch, heads, dim, dim)
+    q = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device="cuda"), dim=-1
+    ).to(dtype)
+    k = torch.nn.functional.normalize(
+        torch.randn(shape, generator=generator, device="cuda"), dim=-1
+    ).to(dtype)
+    v = (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype)
+    g = -torch.rand(shape, generator=generator, device="cuda") * 0.03
+    beta = torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype)
+    w = torch.sigmoid(torch.randn(shape, generator=generator, device="cuda")).to(dtype)
+    initial_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.03
+    )
+    do = (torch.randn(shape, generator=generator, device="cuda") * 0.2).to(dtype)
+    d_final_state = (
+        torch.randn(state_shape, generator=generator, device="cuda", dtype=torch.float32) * 0.1
+    )
+    _, _, aux = chunk_forward(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state,
+        scale=0.125,
+        return_aux=True,
+    )
+    expected, expected_d_residual = boundary_dstate_wy_reference(
+        aux,
+        do,
+        d_final_state,
+        chunk_size=16,
+        return_d_residual=True,
+    )
+
+    actual, d_residual = wy_boundary_dstate(
+        aux,
+        do,
+        d_final_state,
+        return_d_residual=True,
+    )
+    torch.cuda.synchronize()
+
+    assert _select_boundary_mma_value_tile(batch, time, heads) == 16
+    torch.testing.assert_close(actual, expected, atol=4e-4, rtol=2e-3)
+    torch.testing.assert_close(d_residual, expected_d_residual, atol=1e-3, rtol=3e-3)
+    if dtype == torch.bfloat16 and time >= 128:
+        compact, compact_residual, exact_d_initial = wy_boundary_dstate(
+            aux,
+            do,
+            d_final_state,
+            return_d_residual=True,
+            compact_boundaries=True,
+        )
+        torch.cuda.synchronize()
+        torch.testing.assert_close(compact.float(), actual, atol=2e-2, rtol=3e-2)
+        torch.testing.assert_close(
+            compact_residual.float(), expected_d_residual, atol=4e-3, rtol=3e-3
+        )
+        torch.testing.assert_close(exact_d_initial, actual[:, 0], atol=0, rtol=0)
 
 
 @pytest.mark.cuda
