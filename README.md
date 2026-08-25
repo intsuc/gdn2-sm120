@@ -214,7 +214,10 @@ E/K-bar MMA operands use BF16, while the value auxiliary, chunk decay, and
 gamma remain FP32.
 Forward-only BF16 calls use the rearranged output identity from three full
 chunks onward, moving the independent A-qk products out of the ordered state
-scan. When training contains at least 32 full chunks, including a sequence
+scan. The WY preparation skips unused upper-triangular products and balances
+causal rows across warps, while the ordered scan uses bank-aware Y/Q and
+residual shared-memory layouts and omits its redundant final prefetch. When
+training contains at least 32 full chunks, including a sequence
 with a partial tail, that scan consumes a temporary compact Q-effective
 scratch while preserving raw Q-gamma and A-qk checkpoint bits for backward.
 At T=64 and T>=128, each training value-tile CTA safely replaces its disjoint

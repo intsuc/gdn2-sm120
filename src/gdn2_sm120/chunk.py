@@ -170,6 +170,7 @@ def _prepare_wy_kernel(
     if tidx < key_dim:
         key_idx = tidx
         cumulative = cutlass.Float32(0.0)
+        gamma_end = cutlass.Float32(1.0)
         for token_local in cutlass.range_constexpr(chunk_size):
             valid = token_local < length
             gamma = cutlass.Float32(1.0)
@@ -180,6 +181,7 @@ def _prepare_wy_kernel(
                 token = start + token_local
                 cumulative += g[batch, token, head, key_idx].to(cutlass.Float32)
                 gamma = cute.exp(cumulative)
+                gamma_end = gamma
                 k_value = k[batch, token, head, key_idx].to(cutlass.Float32)
                 q_value = q[batch, token, head, key_idx].to(cutlass.Float32)
                 beta_value = beta[batch, token, head, key_idx].to(cutlass.Float32)
@@ -188,7 +190,6 @@ def _prepare_wy_kernel(
             s_erase_bar[token_local, key_idx] = gamma * beta_value * k_value
             s_q_gamma[token_local, key_idx] = gamma * q_value * scale
 
-        gamma_end = cute.exp(cumulative)
         decay_end_out[batch, chunk, head, key_idx] = gamma_end
         for token_local in cutlass.range_constexpr(chunk_size):
             if token_local < length:
@@ -214,18 +215,32 @@ def _prepare_wy_kernel(
     # one-warp reductions while halving CTA size, allowing more independent
     # chunks to reside on each SM and hide the solve/exp latency below.
     for row_group in cutlass.range_constexpr(2):
+        # Pair a cheap low-triangular row with an expensive high-triangular
+        # row.  For a full chunk every warp evaluates exactly seventeen
+        # causal cells instead of leaving warp seven on the 24-cell critical
+        # path while earlier warps wait at the following CTA barrier.
         row = warp + row_group * (_PREPARE_THREADS // 32)
+        if cutlass.const_expr(row_group == 1):  # noqa: SIM102
+            # Retain the original ascending assignment for a partial tail,
+            # where reversing a sparse second row group can lengthen one
+            # warp's path.  All preceding full chunks use the balanced map.
+            if length == chunk_size:
+                row = chunk_size - 1 - warp
         for col in cutlass.range_constexpr(chunk_size):
             lower_value = cutlass.Float32(0.0)
             aqk_value = cutlass.Float32(0.0)
-            if row < length and col < length:
+            # Only the causal triangle is consumed.  Keeping the guard around
+            # the dot products avoids evaluating and reducing the upper half
+            # that is otherwise overwritten with zero below.
+            if row < length and col < length and col <= row:
                 for key_group in cutlass.range_constexpr(key_dim // 32):
                     key_idx = lane + key_group * 32
                     k_bar_value = s_k_bar[col, key_idx]
-                    lower_value += s_erase_bar[row, key_idx] * k_bar_value
+                    if col < row:
+                        lower_value += s_erase_bar[row, key_idx] * k_bar_value
                     aqk_value += s_q_gamma[row, key_idx] * k_bar_value
-            lower_value = _warp_sum(lower_value)
-            aqk_value = _warp_sum(aqk_value)
+                lower_value = _warp_sum(lower_value)
+                aqk_value = _warp_sum(aqk_value)
             if lane == 0:
                 strict_lower = lower_value if col < row else cutlass.Float32(0.0)
                 causal = aqk_value if col <= row else cutlass.Float32(0.0)
@@ -656,19 +671,20 @@ def _inter_chunk_k_split_mma_kernel(
             t_cr_b[None, None, 0],
             t_cr_q,
         )
-        if cutlass.const_expr(use_algebra):
-            next_chunk = cutlass.min(chunk + 1, n_chunks - 1)
-            g_y_next = cute.local_tile(
-                y[batch, None, head, None], (_CHUNK_SIZE, 16), (next_chunk, warp)
-            )
-            g_q_next = cute.local_tile(
-                q_gamma[batch, None, head, None],
-                (_CHUNK_SIZE, 16),
-                (next_chunk, warp),
-            )
-            cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_y_next), t_ds_a)
-            cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_q_next), t_ds_q)
-            cute.arch.cp_async_commit_group()
+        if cutlass.const_expr(use_algebra):  # noqa: SIM102
+            if chunk + 1 < n_chunks:
+                next_chunk = chunk + 1
+                g_y_next = cute.local_tile(
+                    y[batch, None, head, None], (_CHUNK_SIZE, 16), (next_chunk, warp)
+                )
+                g_q_next = cute.local_tile(
+                    q_gamma[batch, None, head, None],
+                    (_CHUNK_SIZE, 16),
+                    (next_chunk, warp),
+                )
+                cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_y_next), t_ds_a)
+                cute.copy(tiled_copy_g2s, thr_copy_g2s.partition_S(g_q_next), t_ds_q)
+                cute.arch.cp_async_commit_group()
         cute.autovec_copy(t_cr_y, t_cs_y_partial)
         cute.autovec_copy(t_cr_q, t_cs_q_partial)
         cute.arch.sync_threads()
@@ -752,7 +768,12 @@ def _inter_chunk_k_split_mma_kernel(
         )
         if cutlass.const_expr(use_algebra):
             # Wait for K-tail (the older group), leaving next Y/Q in flight.
-            cute.arch.cp_async_wait_group(1)
+            # On the final chunk there is no younger group, so drain K-tail
+            # directly instead of issuing a redundant Y/Q prefetch.
+            if chunk + 1 < n_chunks:
+                cute.arch.cp_async_wait_group(1)
+            else:
+                cute.arch.cp_async_wait_group(0)
             cute.arch.sync_warp()
             cute.copy(
                 tiled_copy_a_k_tail,
@@ -788,10 +809,6 @@ def _inter_chunk_k_split_mma_kernel(
                 t_cr_boundary = cute.make_fragment_like(t_cr_state, state_boundaries.element_type)
                 t_cr_boundary[None] = t_cr_state.load().to(state_boundaries.element_type)
                 cute.autovec_copy(t_cr_boundary, t_cg_boundary)
-
-    if cutlass.const_expr(use_algebra):
-        cute.arch.cp_async_wait_group(0)
-        cute.arch.sync_warp()
 
     cute.autovec_copy(t_cr_state, t_cg_final_state)
 
@@ -902,13 +919,24 @@ def _launch_chunk_forward(
             stride=(16 * value_tile, value_tile, 1),
         )
         if cutlass.const_expr(use_algebra):
+            # Keep Y and Q in separate contiguous planes.  Interleaving the
+            # components at the innermost stride makes the V16 half-warps hit
+            # the same shared-memory banks during every eight-way reduction.
             s_partial_layout = cute.make_layout(
                 (_K_SPLIT_WARPS, _CHUNK_SIZE, value_tile, 2),
-                stride=(_CHUNK_SIZE * value_tile * 2, value_tile * 2, 2, 1),
+                stride=(
+                    _CHUNK_SIZE * value_tile * 2,
+                    value_tile,
+                    1,
+                    _CHUNK_SIZE * value_tile,
+                ),
             )
         else:
             s_partial_layout = s_state_layout
-        s_residual_layout = cute.make_layout((value_tile, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
+        # Eight BF16 elements of padding keep every K row 16-byte aligned
+        # while spreading the row-major reduction stores across twice as many
+        # shared-memory bank phases as the unpadded 16-element stride.
+        s_residual_layout = cute.make_layout((value_tile, _CHUNK_SIZE), stride=(_CHUNK_SIZE + 8, 1))
         s_q_total_layout = cute.make_layout((_CHUNK_SIZE, value_tile), stride=(value_tile, 1))
         tiled_mma = cute.make_tiled_mma(
             cute.nvgpu.warp.MmaF16BF16Op(output.element_type, cutlass.Float32, (16, 8, 16)),

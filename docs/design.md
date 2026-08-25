@@ -30,24 +30,28 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 1. one CTA per `(batch, chunk, head)` accumulates log-decay, forms asymmetric
    decay-normalized key/erase/query factors, builds the causal token products,
    and solves the unit-lower-triangular WY system. Eight warps cover the sixteen
-   causal-product rows in two passes; the same 256 threads then solve K/V, each
-   keeping its 16 FP32 values private. The 256-thread CTA permits more resident
-   chunks than the former 512-thread layout while retaining the barrier-free
-   private solution;
+   causal-product rows in two passes, skip the unused upper-triangular products,
+   and pair low/high full-chunk rows to equalize their causal work. The final
+   per-token exponential is reused as the chunk decay. The same 256 threads then
+   solve K/V, each keeping its 16 FP32 values private. The 256-thread CTA permits
+   more resident chunks than the former 512-thread layout while retaining the
+   barrier-free private solution;
 2. value CTAs walk chunk boundaries in a runtime loop. Eight warps split K into
    16-row fragments, keep a `16 x Vtile` FP32 state per warp in registers, and
    evaluate the dense products with `m16n8k16` warp MMA;
-3. warp-local FP32 results are reduced through shared memory. Full-chunk paths
+3. warp-local FP32 results are reduced through shared memory. Y/Q partials use
+   separate contiguous planes and the residual MMA tile has an aligned padded
+   stride, avoiding their bank-conflicted layouts. Full-chunk paths
    stage Y/Q with 128-bit `cp.async` copies and cache the 128-element decay
    vector once per CTA rather than loading it independently from every warp.
    With `ceil(T / 16) < 32` it uses an eight-column value tile (V8). From 32
    chunks onward, the launcher keeps V8 when `batch * heads < 12`, exposing 16
    CTAs per batch/head so a small grid can fill the 188 SMs. From 12
    batch-heads onward it selects V16, whose eight CTAs per batch/head halve
-   duplicated scan traffic. Both schedules keep the same eight-warp K16 split.
-   The algebraic V16 schedule interleaves Y/Q partials in one shared allocation;
-   algebraic V8 uses a separate K-tail tile because its smaller state staging
-   allocation cannot safely hold 16x16;
+   duplicated scan traffic. Both schedules keep the same eight-warp K16 split
+   and use one allocation with separate Y/Q planes. Algebraic V8 uses a separate
+   K-tail tile because its smaller state staging allocation cannot safely hold
+   16x16;
 4. when a sequence ends in a partial chunk, the MMA scan handles all
    `floor(T / 16)` full chunks and materializes the prefix state. A one-chunk
    scalar scan consumes that state and handles only the final tail. Sequences
@@ -67,7 +71,8 @@ removes `A_qk @ R` from the sequential state scan. The V8 form is profitable
 from the public selector's first complete three-chunk shape; the independent
 V16 crossover remains at 32 chunks. The scan pipelines the next Y/Q tile and
 the current K-tail tile through 128-bit `cp.async`, reusing shared state staging
-after its register load. FP16 retains the original expression to avoid overflow
+after its register load and draining the final K-tail without a redundant Y/Q
+prefetch. FP16 retains the original expression to avoid overflow
 in an intermediate that would cancel algebraically. BF16 training keeps its
 measured 32-chunk crossover: the rearranged expression requires a temporary
 compact Q-effective scratch consumed only by the state scan, while raw Q-gamma
