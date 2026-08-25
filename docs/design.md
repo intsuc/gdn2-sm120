@@ -38,10 +38,15 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 3. warp-local FP32 results are reduced through shared memory. Full-chunk paths
    stage Y/Q with 128-bit `cp.async` copies and cache the 128-element decay
    vector once per CTA rather than loading it independently from every warp.
-   The algebraic long V16 schedule also interleaves Y/Q partials in one shared
-   allocation; T<512 uses V8 to expose more CTAs.
+   T<512 uses an eight-column value tile (V8). At T>=512, the launcher keeps
+   V8 when `batch * heads < 12`, exposing 16 CTAs per batch/head so a small
+   grid can fill the 188 SMs. From 12 batch-heads onward it selects V16, whose
+   eight CTAs per batch/head halve duplicated scan traffic. Both schedules keep
+   the same eight-warp K16 split. The algebraic V16 schedule interleaves Y/Q
+   partials in one shared allocation; algebraic V8 uses a separate K-tail tile
+   because its smaller state staging allocation cannot safely hold 16x16.
 
-For full-chunk, forward-only BF16 calls at T>=512, the output identity
+For full-chunk BF16 calls at T>=512, the output identity
 
 ```text
 R = U - Y S
@@ -53,9 +58,11 @@ moves the two `A_qk` products into the independent chunk-preparation CTAs and
 removes `A_qk @ R` from the sequential state scan. That scan pipelines the next
 Y/Q tile and the current K-tail tile through 128-bit `cp.async`, reusing shared
 state staging after its register load. FP16 retains the original expression to
-avoid overflow in an intermediate that would cancel algebraically; training
-calls retain it because backward consumes the unrearranged compact-WY
-auxiliaries.
+avoid overflow in an intermediate that would cancel algebraically. Long BF16
+training uses the rearranged expression too, but writes Q-effective to a
+temporary compact scratch consumed only by the state scan. It independently
+preserves raw Q-gamma and A-qk checkpoint bits for backward instead of
+overwriting their public auxiliary buffers.
 
 The BF16 specialization is validated for normalized Q/K and bounded model
 activations. Values near the BF16 format limit are outside its numerical
@@ -69,7 +76,10 @@ immediately narrow them to that dtype. U and chunk decay remain FP32. BF16 full
 chunks also store compact BF16 state boundaries; FP16, short, and partial-tail
 training calls retain FP32 boundaries. The chunk size differs from the official
 Triton path's C=64 because BT=16 exposes more CTAs and stays below the SM120
-shared-memory limit.
+shared-memory limit. At T>=512, Q-effective adds one temporary input-dtype
+sequence scratch whose lifetime ends with forward; it is not returned in
+`ChunkForwardAux`, and the raw Q-gamma/A-qk auxiliaries remain bit-identical to
+the non-rearranged training path.
 
 ## Backward
 
@@ -84,8 +94,9 @@ S_previous = Diag(exp(-g)) X
 ```
 
 This remains the lowest-overhead path below T=64. At T=64 and above, forward
-saves every BT=16 boundary. A compact-WY boundary scan computes both the
-reverse state boundaries and
+saves every BT=16 boundary. For a full T=64 sequence, as for full sequences at
+T>=128, an eight-warp K-split MMA boundary scan computes both the reverse state
+boundaries and
 
 ```text
 dR = K_tail dS_next + A_qk.T dO
@@ -94,19 +105,23 @@ dR = K_tail dS_next + A_qk.T dO
 using a K-split eight-warp MMA schedule. Its persistent state remains FP32 in
 registers; the long BF16 path stores forward/reverse checkpoints in BF16 and
 returns the exact FP32 initial-state gradient separately. T=64 through T=127
-use independent chunk-local token VJPs, whose inverse reconstruction is reset
-from an FP32 boundary after at most 16 tokens.
+retain FP32 boundaries.
 
-At T>=128, the parameter VJP uses the full compact-WY graph. For each chunk it
-forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`, `dK_bar`, and the
-reverse cumulative gate gradient through 12 ordered CuTe launches. At T>=2048
-the state-decay dot is folded into the shared-S0 product, reducing this to 11.
-Dual-output S0/square products, paired K16 products, and producer epilogues
-remove redundant reads and launch boundaries. The large `16x128` and `16x16`
-products use warp MMA; the triangular transpose solve and gate chain accumulate
-in FP32. The boundary scan stores `dR`, avoiding two duplicate matrix products;
-compact BF16 scans round only the returned `dR` while keeping the ordered
-boundary recurrence and its precompute scratch in FP32.
+At T=64, the parameter VJP selects the full compact-WY graph only when
+`batch * (T / 16) * heads >= 64`; this CTA-aware threshold is equivalent to
+`batch * heads >= 16` at T=64. Smaller T=64 grids, and T=65--127, use
+independent chunk-local token VJPs whose inverse reconstruction is reset from
+an FP32 boundary after at most 16 tokens. T>=128 always uses compact-WY. For
+each chunk it forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
+`dK_bar`, and the reverse cumulative gate gradient through 12 ordered CuTe
+launches. At T>=2048 the state-decay dot is folded into the shared-S0 product,
+reducing this to 11. Dual-output S0/square products, paired K16 products, and
+producer epilogues remove redundant reads and launch boundaries. The large
+`16x128` and `16x16` products use warp MMA; the triangular transpose solve and
+gate chain accumulate in FP32. The boundary scan stores `dR`, avoiding two
+duplicate matrix products; compact BF16 scans round only the returned `dR`
+while keeping the ordered boundary recurrence and its precompute scratch in
+FP32.
 
 The inverse requires `1 - (beta * k).T @ k` to remain nonzero. With normalized
 keys and erase gates below one this is the usual delta-rule operating region.
@@ -128,6 +143,24 @@ sequence workspace plus 1.5 MiB of square workspace.
 
 ## Token forward
 
+When `T=1` and no initial state is supplied, decay and erase multiply only the
+zero previous state. The recurrence therefore reduces exactly to
+
+```text
+z = w * v
+S = outer(k, z)
+o = (scale * dot(q, k)) * z
+```
+
+A dedicated four-warp kernel evaluates this closed form without loading the
+initial state, `g`, or `beta`; public validation of all six sequence inputs is
+unchanged. Four CTAs per `(batch, head)` retain the generic path's 32-column
+value tiles, while each warp produces eight output columns and, for aligned
+state, two 128-bit stores per owned key row. One- and two-warp tiles exposed
+more CTAs but lost slightly to the four-warp launch on the target GPU, so they
+are not kept as runtime variants.
+
+All other token/recurrent calls use the register-resident recurrence below.
 Token/recurrent forward launches four value-tile CTAs per `(batch, head)`. Each
 CTA has four warps and owns 32 value columns; a warp owns eight columns and a
 lane owns four of the 128 key rows. Its FP32 state fragment remains in registers
@@ -156,7 +189,9 @@ length remains dynamic in the compiled tensor descriptors and in the runtime
 recurrent loop, so one launcher is reused across different decode lengths for
 the same batch/head, dtype, initial-state, and alignment specialization. Scale
 remains a runtime FP32 value and therefore does not create a new executor for
-every caller-provided scale.
+every caller-provided scale. The zero-state T=1 closed form has its own cache;
+because it does not read `g`, changing `g` between the supported sequence dtype
+and FP32 does not create another executor.
 
 The default public call allocates fresh output and final-state tensors and does
 not mutate inputs. Serving code can instead provide `out` and

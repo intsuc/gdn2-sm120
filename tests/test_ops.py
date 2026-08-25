@@ -12,6 +12,28 @@ def _sm120_available() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() == (12, 0)
 
 
+@pytest.mark.parametrize(
+    ("batch", "time", "heads", "expected"),
+    [
+        (1, 63, 64, False),
+        (1, 64, 15, False),
+        (1, 64, 16, True),
+        (2, 64, 8, True),
+        (1, 80, 16, False),
+        (1, 127, 16, False),
+        (1, 128, 1, True),
+        (1, 129, 1, True),
+    ],
+)
+def test_compact_wy_backward_dispatch(
+    batch: int,
+    time: int,
+    heads: int,
+    expected: bool,
+) -> None:
+    assert ops_module._use_compact_wy_backward(batch, time, heads) is expected
+
+
 def test_long_inference_does_not_materialize_backward_aux(monkeypatch) -> None:
     observed_return_aux: list[bool] = []
 
@@ -184,17 +206,27 @@ def test_chunk_gdn2_parallel_backward_handles_partial_tail() -> None:
 @pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 @pytest.mark.parametrize(
-    ("time", "dtype", "has_initial_state", "include_final_state_gradient"),
+    ("time", "heads", "dtype", "has_initial_state", "include_final_state_gradient"),
     [
-        (128, torch.bfloat16, True, True),
-        (512, torch.bfloat16, True, False),
-        (128, torch.bfloat16, False, True),
-        (128, torch.float16, True, True),
+        (64, 16, torch.bfloat16, True, True),
+        (64, 16, torch.float16, True, True),
+        (128, 1, torch.bfloat16, True, True),
+        (512, 1, torch.bfloat16, True, False),
+        (128, 1, torch.bfloat16, False, True),
+        (128, 1, torch.float16, True, True),
     ],
-    ids=["t128-all-seven", "t512-hidden-final", "t128-no-initial", "fp16-fallback"],
+    ids=[
+        "t64-h16-bf16",
+        "t64-h16-fp16",
+        "t128-all-seven",
+        "t512-hidden-final",
+        "t128-no-initial",
+        "fp16-fallback",
+    ],
 )
 def test_chunk_gdn2_full_chunk_backward_matches_reference(
     time: int,
+    heads: int,
     dtype: torch.dtype,
     has_initial_state: bool,
     include_final_state_gradient: bool,
@@ -202,8 +234,8 @@ def test_chunk_gdn2_full_chunk_backward_matches_reference(
     generator = torch.Generator(device="cuda").manual_seed(
         2_605_000 + time + 17 * has_initial_state + 31 * include_final_state_gradient
     )
-    shape = (1, time, 1, 128)
-    state_shape = (1, 1, 128, 128)
+    shape = (1, time, heads, 128)
+    state_shape = (1, heads, 128, 128)
     scale = 0.125
     q = torch.nn.functional.normalize(
         torch.randn(shape, generator=generator, device="cuda"), dim=-1

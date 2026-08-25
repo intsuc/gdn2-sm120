@@ -6,12 +6,15 @@ measured on an NVIDIA RTX PRO 6000 Blackwell Workstation Edition.
 
 The repository contains three working CUDA paths:
 
-- BT=16 compact-WY chunkwise forward with SM120 warp MMA and a specialized
-  algebraic pipeline for long BF16 prefill;
+- BT=16 compact-WY chunkwise forward with SM120 warp MMA, an occupancy-aware
+  V8/V16 scan, and a specialized algebraic pipeline for long BF16 prefill and
+  training;
 - a checkpointed training backward that dispatches between short recurrence,
-  chunk-parallel recurrence, and compact-WY warp-MMA VJPs;
+  chunk-parallel recurrence, and compact-WY warp-MMA VJPs, including a
+  CTA-aware T=64 specialization;
 - a register-resident token/recurrent forward for decoding, with aligned
-  128-bit state I/O and allocation-free serving options.
+  128-bit state I/O, a zero-state T=1 closed form, and allocation-free serving
+  options.
 
 All three are written in CuTe DSL, compile specifically for `sm_120`, use the
 active PyTorch CUDA stream, and cache TVM-FFI executors after the first JIT
@@ -106,6 +109,12 @@ default remains allocation-based and never mutates `initial_state`; explicit
 output buffers are validated for shape, dtype, device, contiguity, and unsafe
 storage overlap.
 
+For the common first decode token (`T=1`, `initial_state=None`), the token path
+uses the exact closed form `S = outer(k, w * v)` and
+`o = scale * dot(q, k) * (w * v)`. The public shape/dtype/device checks for
+`g` and `beta` still apply, but this specialization does not read either tensor
+because decay and erase act only on the absent previous state.
+
 The primitive expects already-activated erase/write gates and log-decay.
 Q/K L2 normalization, gate projections, grouped-value head expansion, packed
 variable-length sequences, and fused gate activation are not yet part of this
@@ -117,8 +126,10 @@ every BT=16 boundary. BF16 full chunks at T>=128 use compact BF16 `S`/`dS`
 checkpoints, while the reverse scan preserves the exact FP32 `dS0` separately;
 FP16, T=64--127, and partial-tail paths retain FP32 boundaries. Backward uses
 these local checkpoints instead of inverting the complete sequence from one
-rounded final state. At 128 tokens and above it dispatches to a compact-WY
-tensor-core VJP. Forward-only calls do not allocate training checkpoints.
+rounded final state. At T=64 it uses the full compact-WY tensor-core VJP when
+the batch/head grid supplies at least 64 chunk-head CTAs; smaller T=64 grids
+retain the chunk-local VJP. T>=128 always dispatches to compact-WY. Forward-only
+calls do not allocate training checkpoints.
 
 ## Benchmark against the official Triton implementation
 
@@ -185,6 +196,7 @@ Representative BF16 medians on the target workstation are:
 | chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
 | chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
 | chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
+| chunk backward | B1 T64 H16 | 175.5 us | 399.6 us | **2.28x** |
 | chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
 | chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
 | chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
@@ -201,14 +213,17 @@ accumulators, warp shuffles, value/key partitioning, and
 `MmaF16BF16Op` warp MMA. The forward state scan and the long-sequence backward
 therefore use a schedule designed for SM120 rather than a direct FROST port.
 
-For long BF16 training, Y, Q-gamma, K-tail, A-qk, and the persistent E/K-bar
-MMA operands use BF16, while U, chunk decay, and gamma remain FP32. Backward
-first precomputes every independent `A_qk.T @ dO` product, then runs a reverse
-boundary scan with 128-bit `cp.async` staging and shuffle-cached decay. It
-emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32. The
-chunk-local compact-WY graph combines paired products and producer epilogues
-into 12 launches, or 11 at T>=2048 on the full-chunk BF16 path where the
-state/gradient decay dot is folded into a large state-product kernel.
+For long BF16 training, Y, raw Q-gamma, K-tail, A-qk, and the persistent
+E/K-bar MMA operands use BF16, while U, chunk decay, and gamma remain FP32.
+At T>=512 the forward scan consumes a temporary compact Q-effective scratch
+for the rearranged output identity while preserving raw Q-gamma and A-qk
+checkpoint bits for backward. Backward first precomputes every independent
+`A_qk.T @ dO` product, then runs a reverse boundary scan with 128-bit
+`cp.async` staging and shuffle-cached decay. It emits compact BF16 `dR` and
+`dS` operands while retaining `dS0` in FP32. The chunk-local compact-WY graph
+combines paired products and producer epilogues into 12 launches, or 11 at
+T>=2048 on the full-chunk BF16 path where the state/gradient decay dot is folded
+into a large state-product kernel.
 
 The implementation is independently derived from the paper's equations. No
 source from the official GDN2 repository (NVIDIA Source Code License-NC) is

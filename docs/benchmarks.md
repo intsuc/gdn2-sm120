@@ -60,7 +60,7 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 8192 | 16 | 20 / 100 | 978.0 | 1036.4 | **1.06x** | 1.41e-3 |
 | chunk forward | 1 | 16384 | 16 | 10 / 50 | 1889.5 | 2111.5 | **1.12x** | 1.50e-3 |
 | chunk backward | 1 | 16 | 16 | 40 / 300 | 112.1 | 274.6 | **2.45x** | 3.91e-3 |
-| chunk backward | 1 | 64 | 16 | 40 / 300 | 172.9 | 396.8 | **2.29x** | 2.44e-3 |
+| chunk backward | 1 | 64 | 16 | 40 / 300 | 175.5 | 399.6 | **2.28x** | 2.44e-3 |
 | chunk backward | 1 | 128 | 16 | 40 / 300 | 126.4 | 279.3 | **2.21x** | 2.08e-3 |
 | chunk backward | 1 | 256 | 16 | 40 / 300 | 134.6 | 278.7 | **2.07x** | 2.44e-3 |
 | chunk backward | 1 | 512 | 16 | 40 / 300 | 148.8 | 284.0 | **1.91x** | 2.93e-3 |
@@ -79,17 +79,21 @@ CuTe-versus-official comparison.
 | token forward | 1 | 128 | 32 | 25 / 100 | 84.3 | 120.2 | **1.43x** | 6.10e-5 |
 
 Forward and backward both stay ahead at every measured point through T=16384.
-The compact-WY dispatch at T=128 reduces CuTe backward latency from 172.9 us at
-T=64 to 126.4 us despite doubling the sequence length. Its advantage narrows
-from 2.45x at T=16 to 1.09x at T=16384 without a measured crossover, while the
-checkpointed path also removes the old T=128 correctness cap.
+The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
+the new CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
+scan. T=128 additionally enables compact BF16 checkpoints and measures 126.4 us.
+The backward advantage narrows from 2.45x at T=16 to 1.09x at T=16384 without a
+measured crossover, while the checkpointed path also removes the old T=128
+correctness cap.
 
 The fixed B1/H32 token sweep stays ahead at all eight sampled decode lengths.
 Its public-call speedup is 1.91x at T=1 and remains 1.43x at T=128; these rows
 include the default output and final-state allocations on both public paths.
 
-For full-chunk BF16 training at T>=128, forward checkpoints Y, Q-gamma,
-K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32.
+For full-chunk BF16 training at T>=128, forward checkpoints Y, raw Q-gamma,
+K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32. At
+T>=512, a separate compact Q-effective scratch lets training use the rearranged
+long-forward identity without changing the raw Q-gamma or A-qk checkpoint bits.
 The boundary stage precomputes all independent `A_qk.T @ dO` products before
 its reverse scan, stages Y/Q-gamma/K-tail with 128-bit `cp.async`, and shares
 each decay value through warp shuffles. It writes BF16 `dR` and `dS`
@@ -108,6 +112,97 @@ command to measure a complete call. Compact BF16 `S`/`dS` checkpoints halve
 boundary storage relative to FP32, but retaining both boundary sets plus
 compact-WY workspace still makes the CuTe path use more memory than the
 official implementation.
+
+## Focused optimization experiments
+
+These CuTe-internal A/B measurements document schedule choices that are not
+additional points in the canonical publication schema. Unless noted otherwise,
+they use the same workstation, normalized BF16 Q/K, FP32 `g`/state, and
+`scale=0.125` as the canonical suite. Medians and minima are synchronized CUDA
+event microseconds.
+
+### T=64 backward boundary and VJP dispatch
+
+The canonical B1/T64/H16 shape has four chunks per head, so its 64 chunk-head
+CTAs meet the compact-WY threshold. The focused same-session sequence below
+separates the T=64 MMA boundary scan from the CTA-aware parameter-VJP dispatch.
+Official timings are shown to make the run-to-run environment visible; the
+implementation delta is the CuTe baseline-to-variant comparison.
+
+| CuTe schedule | Warmup / samples | CuTe median (min) | Official median (min) | CuTe change |
+|---|---:|---:|---:|---:|
+| scalar boundary + chunk-parallel VJP | 30 / 200 | 153.024 (150.784) | 279.088 (267.104) | baseline |
+| MMA boundary + chunk-parallel VJP | 40 / 250 | 135.648 (125.824) | 277.760 (271.232) | **11.36% lower** |
+| MMA boundary + compact-WY VJP | 40 / 300 | 129.504 (120.736) | 277.008 (269.760) | **15.37% lower** |
+
+All three untimed comparisons had `2.441e-3` maximum gradient difference. The
+tracked canonical 175.472/399.584 us row is a separate 40/300 publication run;
+the same-session table is the appropriate evidence for the implementation
+improvement rather than a comparison against an older canonical capture.
+
+### Zero-state T=1 token closed form
+
+This experiment uses B1/T1/H32 with `initial_state=None`, unlike the canonical
+token sweep, which enables an initial state. It therefore remains supplemental
+instead of replacing or duplicating the canonical B1/T1/H32 graph point.
+
+| Call boundary / implementation | Warmup / samples | Median | Minimum | Relative result |
+|---|---:|---:|---:|---:|
+| public CuTe, closed form | 25 / 100 | 13.248 | 7.200 | **1.975x vs official** |
+| direct CuTe, generic recurrence | 25 / 100 | 5.776 | 5.632 | baseline |
+| direct CuTe, closed form | 25 / 100 | 5.536 | 5.280 | **1.043x vs generic** |
+| public official Triton | 25 / 100 | 26.160 | 25.312 | baseline |
+
+The untimed official comparison measured `3.81e-6` maximum output difference
+and zero state difference. A separate 1,000-call Nsight Systems launch sweep of
+true 8/16/32-column CTA granularities measured projected launch spacings of
+3.214, 3.219, and 3.189 us for one, two, and four warps respectively, versus
+3.695 us for the generic direct path. The four-warp schedule won and is the only
+variant retained.
+
+### Long-forward value-tile dispatch
+
+For T>=512, V8 supplies sixteen CTAs per batch/head and V16 supplies eight. The
+focused public-forward sweep used 25 warmups and 100 samples per variant; rows
+around the occupancy crossover are shown below.
+
+| B | T | H | V8 median (min) | V16 median (min) | Winner |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 512 | 1 | 51.680 (50.528) | 54.656 (53.440) | **V8** |
+| 1 | 512 | 8 | 56.832 (55.552) | 59.776 (51.680) | **V8** |
+| 1 | 512 | 12 | 70.208 (69.088) | 64.848 (63.680) | **V16** |
+| 1 | 512 | 16 | 72.960 (71.744) | 64.032 (63.616) | **V16** |
+| 1 | 2048 | 8 | 135.744 (133.536) | 145.824 (143.712) | **V8** |
+| 1 | 2048 | 12 | 183.872 (177.696) | 161.184 (159.808) | **V16** |
+| 1 | 2048 | 16 | 204.128 (201.568) | 171.296 (163.424) | **V16** |
+| 2 | 2048 | 32 | 1024.144 (1013.728) | 789.360 (776.320) | **V16** |
+
+The selected rule is consequently V8 when `batch * heads < 12`, otherwise V16.
+T<512 remains V8 regardless of grid size.
+
+### Long-training Q-effective scratch
+
+The A/B forces the legacy versus rearranged forward algebra while preserving
+the same returned training auxiliaries. Return-aux forward uses 25 warmups and
+100 samples; full forward-plus-backward training uses 10 warmups and 50
+samples. Both are CuTe-only comparisons, not official-baseline publication
+points.
+
+| Timed path | T | Legacy median (min) | Q-effective median (min) | Speedup |
+|---|---:|---:|---:|---:|
+| return-aux forward | 512 | 87.616 (86.400) | 70.288 (61.888) | **1.247x** |
+| return-aux forward | 1024 | 149.104 (140.352) | 113.984 (113.440) | **1.308x** |
+| return-aux forward | 2048 | 306.304 (297.984) | 244.016 (240.608) | **1.255x** |
+| chunk training | 512 | 207.952 (204.544) | 195.568 (192.448) | **1.063x** |
+| chunk training | 1024 | 418.912 (415.840) | 385.472 (381.376) | **1.087x** |
+| chunk training | 2048 | 893.344 (888.192) | 816.384 (810.240) | **1.094x** |
+
+Across T=512/1024/2048, state output was bit-identical, every returned raw
+Q-gamma/A-qk and other auxiliary was bit-identical, and maximum output
+differences were `1.22e-4`, `2.44e-4`, and `2.44e-4`. A T=1024 backward-only
+recheck kept all seven gradients bit-identical; its 298.016 versus 298.784 us
+medians were within measurement noise, as expected because the extra
+Q-effective scratch is forward-only.
 
 The exact values behind the per-kernel table and the README light/dark figures
 are tracked in

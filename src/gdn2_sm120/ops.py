@@ -13,8 +13,19 @@ from .chunk import ChunkForwardAux, chunk_forward
 from .recurrent import token_forward
 
 _DIM = 128
+_CHUNK_SIZE = 16
 _PARALLEL_BACKWARD_MIN_TOKENS = 64
 _COMPACT_WY_BACKWARD_MIN_TOKENS = 128
+_T64_COMPACT_WY_MIN_CHUNK_HEADS = 64
+
+
+def _use_compact_wy_backward(batch: int, time: int, heads: int) -> bool:
+    """Select the staged VJP only when the T=64 grid can fill the GPU."""
+
+    chunk_heads = batch * (time // _CHUNK_SIZE) * heads
+    return time >= _COMPACT_WY_BACKWARD_MIN_TOKENS or (
+        time == 64 and chunk_heads >= _T64_COMPACT_WY_MIN_CHUNK_HEADS
+    )
 
 
 class _ChunkGDN2(torch.autograd.Function):
@@ -104,7 +115,8 @@ class _ChunkGDN2(torch.autograd.Function):
             elif not d_final_state.is_contiguous():
                 d_final_state = d_final_state.contiguous()
             boundary_aux = WYBoundaryAux(y, q_gamma, k_tail, decay_end, aqk)
-            if q.shape[1] >= _COMPACT_WY_BACKWARD_MIN_TOKENS:
+            use_compact_wy = _use_compact_wy_backward(q.shape[0], q.shape[1], q.shape[2])
+            if use_compact_wy:
                 compact_boundaries = state_boundaries.dtype == q.dtype
                 boundary_result = wy_boundary_dstate(
                     boundary_aux,

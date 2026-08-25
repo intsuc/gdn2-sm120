@@ -116,9 +116,9 @@
     {
       "mode": "chunk-backward", "batch": 1, "time": 64, "heads": 16, "dtype": "bf16",
       "warmup": 40, "repeats": 300,
-      "cute": {"implementation": "cute-sm120", "median_us": 172.91200160980225, "minimum_us": 164.89599645137787},
-      "triton": {"implementation": "official-triton", "median_us": 396.8160003423691, "minimum_us": 380.47999143600464},
-      "speedup": 2.294901433376698, "validation_max_abs": 0.00244140625,
+      "cute": {"implementation": "cute-sm120", "median_us": 175.47199875116348, "minimum_us": 162.27200627326965},
+      "triton": {"implementation": "official-triton", "median_us": 399.58399534225464, "minimum_us": 385.43999195098877},
+      "speedup": 2.277195211692459, "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38", "qk_l2_normalized": true, "scale": 0.125,
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "torch_version": "2.13.0+cu130", "cuda_runtime": "13.0"

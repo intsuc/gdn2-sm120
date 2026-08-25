@@ -15,6 +15,34 @@ def _cuda_available() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() == (12, 0)
 
 
+def _t1_zero_closed_form(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    scale: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    q_t = q[:, 0].float()
+    k_t = k[:, 0].float()
+    update = w[:, 0].float() * v[:, 0].float()
+    state = k_t.unsqueeze(-1) * update.unsqueeze(-2)
+    qk = (q_t * scale * k_t).sum(dim=-1, keepdim=True)
+    return (qk * update).unsqueeze(1).to(q.dtype), state
+
+
+def test_t1_zero_closed_form_matches_recurrence_on_cpu() -> None:
+    torch.manual_seed(611)
+    shape = (2, 1, 3, 128)
+    q, k, v, beta, w = [(torch.randn(shape) * 0.1).bfloat16() for _ in range(5)]
+    g = -torch.rand(shape) * 0.07
+    expected_output, expected_state = recurrent_forward_reference(q, k, v, g, beta, w, scale=0.0625)
+    closed_output, closed_state = _t1_zero_closed_form(q, k, v, w, 0.0625)
+
+    assert expected_state is not None
+    torch.testing.assert_close(closed_output, expected_output, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(closed_state, expected_state, rtol=1e-5, atol=1e-5)
+
+
 def test_empty_byte_span_does_not_overlap() -> None:
     assert not recurrent_module._spans_overlap((128, 128), (0, 256))
     assert not recurrent_module._spans_overlap((0, 256), (128, 128))
@@ -94,6 +122,72 @@ def test_token_forward_supports_arbitrary_singleton_strides() -> None:
 
     assert expected_state is not None
     assert output is output_buffer
+    torch.testing.assert_close(output, expected_output, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(final_state, expected_state, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="requires an SM120 CUDA GPU")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_token_forward_t1_zero_uses_closed_form_on_current_stream(dtype: torch.dtype) -> None:
+    torch.manual_seed(271)
+    device = torch.device("cuda")
+    shape = (2, 1, 3, 128)
+    q, k, v, beta, w = [(torch.randn(shape, device=device) * 0.1).to(dtype) for _ in range(5)]
+    g_low = (-torch.rand(shape, device=device) * 0.05).to(dtype)
+    expected_output, expected_state = _t1_zero_closed_form(q, k, v, w, 0.0625)
+
+    output, final_state = token_forward(q, k, v, g_low, beta, w, scale=0.0625)
+    launcher_keys = set(recurrent_module._COMPILED_T1_ZERO_LAUNCHERS)
+
+    stream = torch.cuda.Stream(device=device)
+    stream.wait_stream(torch.cuda.current_stream(device))
+    g_fp32 = -torch.rand(shape, device=device) * 0.11
+    beta_other = torch.randn(shape, device=device).to(dtype)
+    with torch.cuda.stream(stream):
+        output_other, state_other = token_forward(q, k, v, g_fp32, beta_other, w, scale=0.0625)
+        finished = stream.record_event()
+    torch.cuda.current_stream(device).wait_event(finished)
+    scaled_output, scaled_state = token_forward(q, k, v, g_low, beta, w, scale=0.0375)
+    expected_scaled_output, _ = _t1_zero_closed_form(q, k, v, w, 0.0375)
+
+    assert set(recurrent_module._COMPILED_T1_ZERO_LAUNCHERS) == launcher_keys
+    torch.testing.assert_close(output, expected_output, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(final_state, expected_state, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(output_other, output, rtol=0, atol=0)
+    torch.testing.assert_close(state_other, final_state, rtol=0, atol=0)
+    torch.testing.assert_close(scaled_output, expected_scaled_output, rtol=2e-3, atol=2e-3)
+    torch.testing.assert_close(scaled_state, final_state, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="requires an SM120 CUDA GPU")
+def test_token_forward_t1_zero_supports_unaligned_output_buffers() -> None:
+    torch.manual_seed(613)
+    device = torch.device("cuda")
+    shape = (1, 1, 1, 128)
+    q, k, v, beta, w = [(torch.randn(shape, device=device) * 0.1).bfloat16() for _ in range(5)]
+    g = -torch.rand(shape, device=device) * 0.05
+    expected_output, expected_state = _t1_zero_closed_form(q, k, v, w, 0.0625)
+    output_backing = torch.empty(q.numel() + 1, device=device, dtype=q.dtype)
+    output_buffer = output_backing[1:].view_as(q)
+    state_backing = torch.empty(128 * 128 + 1, device=device)
+    state_buffer = state_backing[1:].view(1, 1, 128, 128)
+
+    output, final_state = token_forward(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        scale=0.0625,
+        out=output_buffer,
+        final_state_out=state_buffer,
+    )
+
+    assert output is output_buffer
+    assert final_state is state_buffer
+    assert output.data_ptr() % 16 != 0
+    assert final_state.data_ptr() % 16 != 0
     torch.testing.assert_close(output, expected_output, rtol=2e-3, atol=2e-3)
     torch.testing.assert_close(final_state, expected_state, rtol=1e-5, atol=1e-5)
 

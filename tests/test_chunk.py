@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from gdn2_sm120.chunk import chunk_forward
+from gdn2_sm120.chunk import _select_k_split_value_tile, chunk_forward
 from gdn2_sm120.reference import chunkwise_forward_reference
 
 
@@ -38,6 +38,22 @@ def _inputs(
         * 0.01
     )
     return q, k, v, g, beta, w, state
+
+
+@pytest.mark.parametrize(
+    ("batch", "heads", "n_chunks", "expected"),
+    [
+        pytest.param(1, 64, 31, 8, id="short-sequence-keeps-v8"),
+        pytest.param(1, 1, 32, 8, id="one-head-long-v8"),
+        pytest.param(1, 4, 32, 8, id="four-head-long-v8"),
+        pytest.param(1, 8, 32, 8, id="eight-head-long-v8"),
+        pytest.param(1, 12, 32, 16, id="empirical-v16-crossover"),
+        pytest.param(1, 16, 32, 16, id="sixteen-head-long-v16"),
+        pytest.param(2, 32, 32, 16, id="multi-batch-long-v16"),
+    ],
+)
+def test_select_k_split_value_tile(batch: int, heads: int, n_chunks: int, expected: int) -> None:
+    assert _select_k_split_value_tile(batch, heads, n_chunks) == expected
 
 
 @pytest.mark.cuda
@@ -167,10 +183,17 @@ def test_chunk_forward_compact_dispatch_boundaries(time: int, dtype: torch.dtype
 
 
 @pytest.mark.cuda
-def test_chunk_forward_long_algebra_maps_batches_and_heads() -> None:
+@pytest.mark.parametrize(
+    ("batch", "heads"),
+    [
+        pytest.param(2, 3, id="v8-underfilled"),
+        pytest.param(2, 6, id="v16-crossover-mapping"),
+    ],
+)
+def test_chunk_forward_long_algebra_maps_batches_and_heads(batch: int, heads: int) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
-    args = _inputs(512, batch=2, heads=3, normalized_qk=True)
+    args = _inputs(512, batch=batch, heads=heads, normalized_qk=True)
     output, final_state = chunk_forward(*args[:6], args[6], scale=0.125)
     expected_output, expected_state = chunkwise_forward_reference(
         *args[:6], args[6], scale=0.125, chunk_size=16
@@ -310,6 +333,30 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
             atol=1.5e-3,
             rtol=3e-2,
         )
+
+
+@pytest.mark.cuda
+def test_chunk_forward_training_algebra_preserves_raw_q_gamma_and_aqk() -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    time = 512
+    args = _inputs(time, heads=1, normalized_qk=True)
+    _, _, aux = chunk_forward(*args[:6], args[6], scale=0.125, return_aux=True)
+    torch.cuda.synchronize()
+
+    batch, _, heads, key_dim = args[0].shape
+    n_chunks = time // 16
+    q_chunks = args[0].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    k_chunks = args[1].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    g_chunks = args[3].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    gamma = g_chunks.float().cumsum(dim=-2).exp()
+    raw_q_gamma = q_chunks.float() * gamma * 0.125
+    k_bar = k_chunks.float() / gamma
+    raw_aqk = torch.tril(torch.matmul(raw_q_gamma, k_bar.transpose(-1, -2)))
+    raw_q_gamma = raw_q_gamma.permute(0, 1, 3, 2, 4).reshape_as(args[0])
+
+    torch.testing.assert_close(aux.q_gamma.float(), raw_q_gamma, atol=1e-3, rtol=2e-3)
+    torch.testing.assert_close(aux.aqk.float(), raw_aqk, atol=2e-3, rtol=2e-3)
 
 
 @pytest.mark.cuda

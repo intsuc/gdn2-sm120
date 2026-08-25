@@ -252,10 +252,18 @@ def test_cute_parallel_chunk_vjp_matches_proven_reference() -> None:
 @pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=["bf16", "fp16"])
-@pytest.mark.parametrize("compact_aux", [False, True], ids=["fp32-aux", "compact-aux"])
-def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype, compact_aux: bool) -> None:
-    generator = torch.Generator(device="cuda").manual_seed(812_800)
-    shape = (1, 128, 1, 128)
+@pytest.mark.parametrize(
+    ("time", "compact_aux"),
+    [(64, False), (128, False), (128, True)],
+    ids=["t64-fp32-aux", "t128-fp32-aux", "t128-compact-aux"],
+)
+def test_cute_mma_boundary_scan_matches_reference(
+    time: int,
+    dtype: torch.dtype,
+    compact_aux: bool,
+) -> None:
+    generator = torch.Generator(device="cuda").manual_seed(812_800 + time)
+    shape = (1, time, 1, 128)
     state_shape = (1, 1, 128, 128)
     q = torch.nn.functional.normalize(
         torch.randn(shape, generator=generator, device="cuda"), dim=-1
@@ -298,6 +306,14 @@ def test_cute_mma_boundary_scan_matches_reference(dtype: torch.dtype, compact_au
     )
 
     default_result = wy_boundary_dstate(aux, do, d_final_state)
+    if time == 64:
+        with pytest.raises(ValueError, match="compact boundaries require T >= 128"):
+            wy_boundary_dstate(
+                aux,
+                do,
+                d_final_state,
+                compact_boundaries=True,
+            )
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):

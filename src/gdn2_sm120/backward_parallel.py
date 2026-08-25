@@ -1960,8 +1960,10 @@ def wy_boundary_dstate(
         raise TypeError("return_d_residual must be bool")
     if not isinstance(compact_boundaries, bool):
         raise TypeError("compact_boundaries must be bool")
+    if compact_boundaries and time < 128:
+        raise ValueError("compact boundaries require T >= 128")
 
-    use_mma = time >= 128 and time % _CHUNK_SIZE == 0
+    use_mma = (time == 64 or time >= 128) and time % _CHUNK_SIZE == 0
     if compact_boundaries and not use_mma:
         raise ValueError("compact boundaries require the full-chunk MMA path")
     if compact_boundaries and do.dtype != torch.bfloat16:

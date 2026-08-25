@@ -43,6 +43,7 @@ _COL_GROUP = 8
 _COMPILED_LAUNCHERS: dict[
     tuple[torch.device, torch.dtype, torch.dtype, int, int, bool, bool, bool], object
 ] = {}
+_COMPILED_T1_ZERO_LAUNCHERS: dict[tuple[torch.device, torch.dtype, int, int, bool], object] = {}
 _COMPILE_LOCK = threading.Lock()
 
 
@@ -193,6 +194,66 @@ def _token_forward_kernel(
         cute.autovec_copy(state_row, g_state_row)
 
 
+@cute.kernel
+def _token_forward_t1_zero_kernel(
+    q: cute.Tensor,
+    k: cute.Tensor,
+    v: cute.Tensor,
+    w: cute.Tensor,
+    output: cute.Tensor,
+    final_state: cute.Tensor,
+    heads: cutlass.Constexpr,
+    scale: cutlass.Float32,
+):
+    """Evaluate the closed form for one token starting from zero state."""
+
+    tidx, _, _ = cute.arch.thread_idx()
+    block, _, _ = cute.arch.block_idx()
+    lane = tidx & 31
+    warp = tidx >> 5
+    value_tile = block % _VALUE_TILES
+    head_block = block // _VALUE_TILES
+    head = head_block % heads
+    batch = head_block // heads
+
+    k_rows = cute.make_rmem_tensor((_ROWS_PER_LANE,), cutlass.Float32)
+    qk_partial = cutlass.Float32(0.0)
+    for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
+        key_row = lane + row_slot * 32
+        q_value = q[batch, 0, head, key_row].to(cutlass.Float32)
+        k_value = k[batch, 0, head, key_row].to(cutlass.Float32)
+        k_rows[row_slot] = k_value
+        qk_partial += q_value * scale * k_value
+    qk = cute.arch.warp_reduction_sum(qk_partial)
+
+    update_lane = cutlass.Float32(0.0)
+    if lane < _COL_GROUP:
+        value_col = value_tile * _VALUE_TILE + warp * _COL_GROUP + lane
+        value_value = v[batch, 0, head, value_col].to(cutlass.Float32)
+        write_value = w[batch, 0, head, value_col].to(cutlass.Float32)
+        update_lane = write_value * value_value
+
+    updates = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
+    for group_col in cutlass.range_constexpr(_COL_GROUP):
+        update = cute.arch.shuffle_sync(update_lane, group_col)
+        updates[group_col] = update
+        if lane == 0:
+            value_col = value_tile * _VALUE_TILE + warp * _COL_GROUP + group_col
+            output[batch, 0, head, value_col] = (qk * update).to(output.element_type)
+
+    for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
+        key_row = lane + row_slot * 32
+        g_state_row = cute.local_tile(
+            final_state[batch, head, key_row, None],
+            (_COL_GROUP,),
+            (value_tile * _WARPS + warp,),
+        )
+        state_row = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
+        for group_col in cutlass.range_constexpr(_COL_GROUP):
+            state_row[group_col] = k_rows[row_slot] * updates[group_col]
+        cute.autovec_copy(state_row, g_state_row)
+
+
 @cute.jit
 def _launch_token_forward(
     q: cute.Tensor,
@@ -225,6 +286,35 @@ def _launch_token_forward(
         heads,
         scale,
         has_initial_state,
+    ).launch(
+        grid=(batch * heads * _VALUE_TILES, 1, 1),
+        block=(_THREADS, 1, 1),
+        stream=stream,
+    )
+
+
+@cute.jit
+def _launch_token_forward_t1_zero(
+    q: cute.Tensor,
+    k: cute.Tensor,
+    v: cute.Tensor,
+    w: cute.Tensor,
+    output: cute.Tensor,
+    final_state: cute.Tensor,
+    batch: cutlass.Constexpr,
+    heads: cutlass.Constexpr,
+    scale: cutlass.Float32,
+    stream: cuda.CUstream,
+):
+    _token_forward_t1_zero_kernel(
+        q,
+        k,
+        v,
+        w,
+        output,
+        final_state,
+        heads,
+        scale,
     ).launch(
         grid=(batch * heads * _VALUE_TILES, 1, 1),
         block=(_THREADS, 1, 1),
@@ -434,6 +524,57 @@ def _get_compiled_launcher(
     return compiled
 
 
+def _get_compiled_t1_zero_launcher(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    output: torch.Tensor,
+    final_state: torch.Tensor,
+    batch: int,
+    heads: int,
+    output_scale: float,
+    stream: cuda.CUstream,
+):
+    final_state_aligned = final_state.data_ptr() % 16 == 0
+    key = (q.device, q.dtype, batch, heads, final_state_aligned)
+    compiled = _COMPILED_T1_ZERO_LAUNCHERS.get(key)
+    if compiled is not None:
+        return compiled
+
+    with _COMPILE_LOCK:
+        compiled = _COMPILED_T1_ZERO_LAUNCHERS.get(key)
+        if compiled is None:
+            sequence_strides = _canonical_strides(q.shape)
+            q_compile, k_compile, v_compile, w_compile = (
+                _canonical_view(tensor, sequence_strides) for tensor in (q, k, v, w)
+            )
+            output_compile = _canonical_view(output, sequence_strides)
+            state_strides = _canonical_strides(final_state.shape)
+            final_state_compile = _canonical_view(final_state, state_strides)
+            compiled = cute.compile(
+                _launch_token_forward_t1_zero,
+                from_dlpack(q_compile, use_32bit_stride=True, enable_tvm_ffi=True),
+                from_dlpack(k_compile, use_32bit_stride=True, enable_tvm_ffi=True),
+                from_dlpack(v_compile, use_32bit_stride=True, enable_tvm_ffi=True),
+                from_dlpack(w_compile, use_32bit_stride=True, enable_tvm_ffi=True),
+                from_dlpack(output_compile, use_32bit_stride=True, enable_tvm_ffi=True),
+                from_dlpack(
+                    final_state_compile,
+                    assumed_align=16 if final_state_aligned else None,
+                    use_32bit_stride=True,
+                    enable_tvm_ffi=True,
+                ),
+                batch,
+                heads,
+                cutlass.Float32(output_scale),
+                stream,
+                options="--enable-tvm-ffi",
+            )
+            _COMPILED_T1_ZERO_LAUNCHERS[key] = compiled
+    return compiled
+
+
 def _invoke_token_forward(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -482,6 +623,33 @@ def _invoke_token_forward(
         output_scale,
         stream,
     )
+
+
+def _invoke_token_forward_t1_zero(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    output: torch.Tensor,
+    final_state: torch.Tensor,
+    batch: int,
+    heads: int,
+    output_scale: float,
+) -> None:
+    stream = _driver_stream(torch.cuda.current_stream().cuda_stream)
+    compiled = _get_compiled_t1_zero_launcher(
+        q,
+        k,
+        v,
+        w,
+        output,
+        final_state,
+        batch,
+        heads,
+        output_scale,
+        stream,
+    )
+    compiled(q, k, v, w, output, final_state, output_scale, stream)
 
 
 def token_forward(
@@ -587,26 +755,22 @@ def token_forward(
     # final_state is a safe dummy input when the recurrence starts from zero;
     # the compile-time flag removes the uninitialized read from the kernel.
     state_input = final_state if initial_state is None else initial_state
+    use_t1_zero = time == 1 and initial_state is None
 
     if _cuda_device_count() == 1:
-        _invoke_token_forward(
-            q,
-            k,
-            v,
-            g,
-            beta,
-            w,
-            state_input,
-            output,
-            final_state,
-            batch,
-            time,
-            heads,
-            output_scale,
-            initial_state is not None,
-        )
-    else:
-        with torch.cuda.device(q.device):
+        if use_t1_zero:
+            _invoke_token_forward_t1_zero(
+                q,
+                k,
+                v,
+                w,
+                output,
+                final_state,
+                batch,
+                heads,
+                output_scale,
+            )
+        else:
             _invoke_token_forward(
                 q,
                 k,
@@ -623,6 +787,37 @@ def token_forward(
                 output_scale,
                 initial_state is not None,
             )
+    else:
+        with torch.cuda.device(q.device):
+            if use_t1_zero:
+                _invoke_token_forward_t1_zero(
+                    q,
+                    k,
+                    v,
+                    w,
+                    output,
+                    final_state,
+                    batch,
+                    heads,
+                    output_scale,
+                )
+            else:
+                _invoke_token_forward(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    w,
+                    state_input,
+                    output,
+                    final_state,
+                    batch,
+                    time,
+                    heads,
+                    output_scale,
+                    initial_state is not None,
+                )
 
     return output, final_state
 

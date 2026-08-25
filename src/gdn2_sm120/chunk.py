@@ -8,7 +8,8 @@ WY algorithm:
    chunk-local auxiliaries;
 2. for full BT=16 chunks, every ``(batch, head, value tile)`` uses eight warps
    split across K.  Each warp keeps a ``16 x 8`` or ``16 x 16`` FP32 state tile
-   in registers while ``m16n8k16`` tensor-core operations evaluate all dense
+   in registers, selected to balance grid coverage against duplicated scan
+   traffic, while ``m16n8k16`` tensor-core operations evaluate all dense
    products; a deterministic shared-memory reduction combines the K partials;
 3. sequences with a partial final chunk retain a scalar warp-reduction scan so
    arbitrary positive lengths preserve the same API and numerical semantics.
@@ -39,18 +40,34 @@ _INTER_WARPS = 4
 _COLS_PER_WARP = 1
 _INTER_THREADS = _INTER_WARPS * 32
 _VALUE_TILE = _INTER_WARPS * _COLS_PER_WARP
-# The long scan splits K across eight warps.  Each warp owns a persistent
-# 16x8 (short) or 16x16 (long) state tile, retaining enough resident warps while
-# replacing all dense products with m16n8k16 tensor-core operations.
+# The full-chunk scan splits K across eight warps.  Each warp owns a persistent
+# 16x8 or 16x16 state tile, retaining enough resident warps while replacing all
+# dense products with m16n8k16 tensor-core operations.
 _K_SPLIT_WARPS = _KEY_DIM // 16
 _K_SPLIT_THREADS = _K_SPLIT_WARPS * 32
 _K_SPLIT_VALUE_TILE = 8
 _K_SPLIT_MIN_CHUNKS = 1
 _K_SPLIT_LONG_VALUE_TILE = 16
 _K_SPLIT_LONG_MIN_CHUNKS = 32
-# The pipelined algebra scan reuses its 16x16 shared state tile for K-tail.
+# V8 launches sixteen CTAs per (batch, head), reaching a full 188-SM wave at
+# twelve heads across the batch.  From there V16 wins by halving duplicated
+# scan traffic; below it V8 exposes the missing independent value tiles.  Both
+# schedules retain the proven K16/eight-warp split.
+_K_SPLIT_V16_MIN_BATCH_HEADS = 12
+# The V16 algebra scan reuses its 16x16 shared state tile for K-tail; the V8
+# specialization allocates an explicit K-tail stage of the same shape.
 _ALGEBRA_MIN_CHUNKS = _K_SPLIT_LONG_MIN_CHUNKS
 assert _K_SPLIT_LONG_VALUE_TILE == _CHUNK_SIZE
+
+
+def _select_k_split_value_tile(batch: int, heads: int, n_chunks: int) -> int:
+    """Choose the value tile without changing the eight-warp K split."""
+
+    if n_chunks < _K_SPLIT_LONG_MIN_CHUNKS:
+        return _K_SPLIT_VALUE_TILE
+    if batch * heads < _K_SPLIT_V16_MIN_BATCH_HEADS:
+        return _K_SPLIT_VALUE_TILE
+    return _K_SPLIT_LONG_VALUE_TILE
 
 
 @cute.jit
@@ -74,6 +91,7 @@ def _prepare_wy_kernel(
     y_out: cute.Tensor,
     u_out: cute.Tensor,
     q_gamma_out: cute.Tensor,
+    q_effective_out: cute.Tensor,
     k_tail_out: cute.Tensor,
     decay_end_out: cute.Tensor,
     aqk_out: cute.Tensor,
@@ -86,6 +104,7 @@ def _prepare_wy_kernel(
     key_dim: cutlass.Constexpr,
     value_dim: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
+    store_forward_aux: cutlass.Constexpr,
 ):
     tidx, _, _ = cute.arch.thread_idx()
     block, _, _ = cute.arch.block_idx()
@@ -137,7 +156,9 @@ def _prepare_wy_kernel(
         for token_local in cutlass.range_constexpr(chunk_size):
             if token_local < length:
                 token = start + token_local
-                if cutlass.const_expr(not use_algebra):
+                # Training exposes raw Q-gamma even when the scan consumes the
+                # algebraically rearranged Q-effective scratch.
+                if cutlass.const_expr(not use_algebra or store_forward_aux):
                     q_gamma_out[batch, token, head, key_idx] = s_q_gamma[token_local, key_idx].to(
                         q_gamma_out.element_type
                     )
@@ -166,7 +187,8 @@ def _prepare_wy_kernel(
             causal = aqk_value if col <= row else cutlass.Float32(0.0)
             s_lower[row, col] = strict_lower
             s_aqk[row, col] = causal
-            if cutlass.const_expr(not use_algebra):
+            # AQK remains part of the public training checkpoint contract.
+            if cutlass.const_expr(not use_algebra or store_forward_aux):
                 aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
 
     cute.arch.sync_threads()
@@ -206,8 +228,8 @@ def _prepare_wy_kernel(
                             q_effective -= s_aqk[row_store, previous].to(aqk_out.element_type).to(
                                 cutlass.Float32
                             ) * solution[previous].to(y_out.element_type).to(cutlass.Float32)
-                        q_gamma_out[batch, token, head, dim] = q_effective.to(
-                            q_gamma_out.element_type
+                        q_effective_out[batch, token, head, dim] = q_effective.to(
+                            q_effective_out.element_type
                         )
                 else:
                     value_idx = dim - key_dim
@@ -363,6 +385,11 @@ def _inter_chunk_k_split_mma_kernel(
     s_a_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
     s_q_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
     s_state_all = allocator.allocate_tensor(operand_type, s_state_layout, byte_alignment=1024)
+    # V16 can reuse its 16x16 state staging tile after the state reaches
+    # registers.  V8 only owns 16x8 per warp, so give the pipelined K-tail a
+    # separate 16x16 tile instead of aliasing past the state allocation.
+    if cutlass.const_expr(use_algebra and value_tile < _CHUNK_SIZE):
+        s_k_tail_all = allocator.allocate_tensor(operand_type, s_a_layout, byte_alignment=1024)
     if cutlass.const_expr(use_algebra):
         s_partial_all = allocator.allocate_tensor(
             cutlass.Float32, s_partial_layout, byte_alignment=1024
@@ -392,14 +419,17 @@ def _inter_chunk_k_split_mma_kernel(
         s_state.iterator,
         cute.make_layout((value_tile, 16), stride=(1, value_tile)),
     )
-    # The BF16 state has already reached registers before the long-path K-tail
-    # prefetch reuses its shared allocation as a row-major 16x16 staging tile.
-    s_k_tail_stage = cute.make_tensor(
-        s_state.iterator,
-        cute.make_layout((_CHUNK_SIZE, 16), stride=(16, 1)),
-    )
+    if cutlass.const_expr(use_algebra and value_tile < _CHUNK_SIZE):
+        s_k_tail_stage = s_k_tail_all[warp, None, None]
+    else:
+        # The BF16 state has already reached registers before the V16
+        # long-path prefetch reuses it as a row-major 16x16 staging tile.
+        s_k_tail_stage = cute.make_tensor(
+            s_state.iterator,
+            cute.make_layout((_CHUNK_SIZE, 16), stride=(16, 1)),
+        )
     s_k_tail_as_a = cute.make_tensor(
-        s_state.iterator,
+        s_k_tail_stage.iterator,
         cute.make_layout((16, _CHUNK_SIZE), stride=(1, 16)),
     )
 
@@ -715,6 +745,7 @@ def _launch_chunk_forward(
     y: cute.Tensor,
     u: cute.Tensor,
     q_gamma: cute.Tensor,
+    q_effective: cute.Tensor,
     k_tail: cute.Tensor,
     decay_end: cute.Tensor,
     aqk: cute.Tensor,
@@ -729,6 +760,8 @@ def _launch_chunk_forward(
     has_initial_state: cutlass.Constexpr,
     store_state_boundaries: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
+    store_forward_aux: cutlass.Constexpr,
+    k_split_value_tile: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
     _prepare_wy_kernel(
@@ -741,6 +774,7 @@ def _launch_chunk_forward(
         y,
         u,
         q_gamma,
+        q_effective,
         k_tail,
         decay_end,
         aqk,
@@ -753,6 +787,7 @@ def _launch_chunk_forward(
         _KEY_DIM,
         _VALUE_DIM,
         use_algebra,
+        store_forward_aux,
     ).launch(
         grid=(batch * n_chunks * heads, 1, 1),
         block=(_PREPARE_THREADS, 1, 1),
@@ -762,7 +797,7 @@ def _launch_chunk_forward(
         _inter_chunk_kernel(
             y,
             u,
-            q_gamma,
+            q_effective,
             k_tail,
             decay_end,
             aqk,
@@ -786,9 +821,7 @@ def _launch_chunk_forward(
             stream=stream,
         )
     else:
-        value_tile = _K_SPLIT_VALUE_TILE
-        if cutlass.const_expr(n_chunks >= _K_SPLIT_LONG_MIN_CHUNKS):
-            value_tile = _K_SPLIT_LONG_VALUE_TILE
+        value_tile = k_split_value_tile
         s_a_layout = cute.make_layout(
             (_K_SPLIT_WARPS, _CHUNK_SIZE, 16),
             stride=(_CHUNK_SIZE * 16, 16, 1),
@@ -814,7 +847,7 @@ def _launch_chunk_forward(
         _inter_chunk_k_split_mma_kernel(
             y,
             u,
-            q_gamma,
+            q_effective,
             k_tail,
             decay_end,
             aqk,
@@ -886,6 +919,7 @@ def _compile_chunk_forward(
     compact_state_boundaries: bool,
     store_state_boundaries: bool,
     use_algebra: bool,
+    store_forward_aux: bool,
 ):
     """Compile once per static tensor layout; runtime calls bypass DSL tracing."""
 
@@ -902,6 +936,7 @@ def _compile_chunk_forward(
     aux_dtype = input_dtype if compact_aux or compact_backward_aux else f32
     u_dtype = f32 if compact_backward_aux else aux_dtype
     boundary_dtype = input_dtype if compact_state_boundaries else f32
+    k_split_value_tile = _select_k_split_value_tile(batch, heads, n_chunks)
 
     return cute.compile(
         _launch_chunk_forward,
@@ -915,6 +950,7 @@ def _compile_chunk_forward(
         _fake_tensor(aux_dtype, q_shape),  # y
         _fake_tensor(u_dtype, v_shape),  # u
         _fake_tensor(aux_dtype, q_shape),  # q_gamma
+        _fake_tensor(aux_dtype, q_shape),  # q_effective scan input
         _fake_tensor(aux_dtype, q_shape),  # k_tail
         _fake_tensor(f32, decay_shape),
         _fake_tensor(aux_dtype, aqk_shape),
@@ -931,6 +967,8 @@ def _compile_chunk_forward(
         has_initial_state,
         store_state_boundaries,
         use_algebra,
+        store_forward_aux,
+        k_split_value_tile,
         make_fake_stream(),
         options="--enable-tvm-ffi",
     )
@@ -1012,7 +1050,8 @@ def chunk_forward(
     compact_state_boundaries = compact_backward_aux and q.dtype == torch.bfloat16
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.
-    use_algebra = q.dtype == torch.bfloat16 and compact_aux and n_chunks >= _ALGEBRA_MIN_CHUNKS
+    use_algebra = q.dtype == torch.bfloat16 and full_chunks and n_chunks >= _ALGEBRA_MIN_CHUNKS
+    store_forward_aux = return_aux
     aux_dtype = q.dtype if compact_aux or compact_backward_aux else torch.float32
     u_dtype = torch.float32 if compact_backward_aux else aux_dtype
     output = torch.empty_like(v)
@@ -1023,6 +1062,11 @@ def chunk_forward(
     y = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     u = torch.empty(v.shape, device=q.device, dtype=u_dtype)
     q_gamma = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
+    # Inference reuses its private Q-gamma allocation.  Long BF16 training
+    # keeps raw Q-gamma public and gives the scan a separate compact scratch.
+    q_effective = q_gamma
+    if use_algebra and store_forward_aux:
+        q_effective = torch.empty(q.shape, device=q.device, dtype=q.dtype)
     k_tail = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     decay_end = torch.empty((batch, n_chunks, heads, key_dim), device=q.device, dtype=torch.float32)
     aqk = torch.empty(
@@ -1059,6 +1103,7 @@ def chunk_forward(
             compact_state_boundaries,
             return_aux,
             use_algebra,
+            store_forward_aux,
         )
         stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)
         compiled(
@@ -1067,6 +1112,7 @@ def chunk_forward(
             y,
             u,
             q_gamma,
+            q_effective,
             k_tail,
             decay_end,
             aqk,
