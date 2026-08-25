@@ -157,6 +157,57 @@ def test_long_inference_does_not_materialize_backward_aux(monkeypatch) -> None:
     assert observed_return_aux == [False]
 
 
+def test_hidden_final_state_propagates_none_to_parallel_boundary_scan(monkeypatch) -> None:
+    shape = (1, 128, 1, 128)
+    state_shape = (1, 1, 128, 128)
+    n_chunks = shape[1] // 16
+    observed_terminal_vjps: list[torch.Tensor | None] = []
+
+    def fake_chunk_forward(q, _k, v, _g, _beta, _w, _state, *, scale, return_aux):
+        del scale
+        assert return_aux
+        aux = ops_module.ChunkForwardAux(
+            torch.empty_like(q),
+            torch.empty_like(v),
+            torch.empty_like(q),
+            torch.empty_like(q),
+            torch.empty((1, n_chunks, 1, 128), dtype=torch.float32),
+            torch.empty((1, n_chunks, 1, 16, 16), dtype=q.dtype),
+            torch.empty((1, n_chunks + 1, 1, 128, 128), dtype=torch.float32),
+        )
+        return torch.empty_like(v), torch.empty(state_shape, dtype=torch.float32), aux
+
+    def fake_boundary_scan(aux, _d_output, d_final_state, **_kwargs):
+        del aux
+        observed_terminal_vjps.append(d_final_state)
+        return (
+            torch.empty((1, n_chunks + 1, 1, 128, 128), dtype=torch.float32),
+            torch.empty(shape, dtype=torch.float32),
+        )
+
+    def fake_compact_vjp(q, k, v, g, beta, w, *_args, **_kwargs):
+        return (
+            torch.empty_like(q),
+            torch.empty_like(k),
+            torch.empty_like(v),
+            torch.empty_like(g),
+            torch.empty_like(beta),
+            torch.empty_like(w),
+            torch.empty(state_shape, dtype=torch.float32),
+        )
+
+    monkeypatch.setattr(ops_module, "chunk_forward", fake_chunk_forward)
+    monkeypatch.setattr(ops_module, "wy_boundary_dstate", fake_boundary_scan)
+    monkeypatch.setattr(ops_module, "compact_wy_chunk_vjp_cute", fake_compact_vjp)
+    inputs = [torch.empty(shape, dtype=torch.bfloat16, requires_grad=True) for _ in range(6)]
+
+    output, final_state = chunk_gdn2(*inputs)
+    torch.autograd.grad(output, inputs, torch.empty_like(output))
+
+    assert final_state is None
+    assert observed_terminal_vjps == [None]
+
+
 @pytest.mark.parametrize("context", [torch.no_grad, torch.inference_mode])
 def test_disabled_grad_mode_does_not_materialize_backward_aux(monkeypatch, context) -> None:
     observed_return_aux: list[bool] = []
@@ -319,6 +370,7 @@ def test_chunk_gdn2_parallel_backward_handles_partial_tail(time: int) -> None:
         (64, 16, torch.float16, True, True),
         (128, 1, torch.bfloat16, True, True),
         (512, 1, torch.bfloat16, True, False),
+        (512, 1, torch.bfloat16, False, False),
         (128, 1, torch.bfloat16, False, True),
         (128, 1, torch.float16, True, True),
     ],
@@ -327,6 +379,7 @@ def test_chunk_gdn2_parallel_backward_handles_partial_tail(time: int) -> None:
         "t64-h16-fp16",
         "t128-all-seven",
         "t512-hidden-final",
+        "t512-no-initial-hidden-final",
         "t128-no-initial",
         "fp16-fallback",
     ],
@@ -388,7 +441,8 @@ def test_chunk_gdn2_full_chunk_backward_matches_reference(
             (d_output, d_final_state),
         )
     else:
-        # The custom Function must materialize a zero FP32 final-state VJP.
+        # The custom Function specializes the boundary scan for a zero
+        # terminal VJP without materializing a state-sized tensor.
         actual = torch.autograd.grad(actual_output, actual_targets, d_output)
 
     expected_inputs = [tensor.detach().requires_grad_() for tensor in base]

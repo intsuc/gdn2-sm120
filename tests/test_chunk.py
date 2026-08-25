@@ -344,6 +344,7 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
         )
     )
     assert aux.u.dtype == torch.float32
+    assert aux.u_is_residual is (dtype == torch.bfloat16 and time // 16 >= 32)
     assert aux.decay_end.dtype == torch.float32
     torch.testing.assert_close(
         aux.state_boundaries[:, 0], args[6].to(expected_boundary_dtype), atol=0, rtol=0
@@ -407,20 +408,38 @@ def test_chunk_forward_training_algebra_preserves_raw_q_gamma_and_aqk() -> None:
     args = _inputs(time, heads=1, normalized_qk=True)
     _, _, aux = chunk_forward(*args[:6], args[6], scale=0.125, return_aux=True)
     torch.cuda.synchronize()
+    assert aux.u_is_residual
 
     batch, _, heads, key_dim = args[0].shape
     n_chunks = time // 16
     q_chunks = args[0].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
     k_chunks = args[1].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    v_chunks = args[2].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
     g_chunks = args[3].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    beta_chunks = args[4].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
+    w_chunks = args[5].view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4)
     gamma = g_chunks.float().cumsum(dim=-2).exp()
     raw_q_gamma = q_chunks.float() * gamma * 0.125
     k_bar = k_chunks.float() / gamma
     raw_aqk = torch.tril(torch.matmul(raw_q_gamma, k_bar.transpose(-1, -2)))
     raw_q_gamma = raw_q_gamma.permute(0, 1, 3, 2, 4).reshape_as(args[0])
 
+    erase_bar = gamma * beta_chunks.float() * k_chunks.float()
+    lower = torch.tril(torch.matmul(erase_bar, k_bar.transpose(-1, -2)), diagonal=-1)
+    system = lower + torch.eye(16, device=args[0].device)
+    raw_u = torch.linalg.solve_triangular(
+        system,
+        w_chunks.float() * v_chunks.float(),
+        upper=False,
+        unitriangular=True,
+    )
+    y_chunks = aux.y.view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4).float()
+    expected_residual = raw_u - torch.matmul(y_chunks, aux.state_boundaries[:, :-1].float())
+    saved_residual = aux.u.view(batch, n_chunks, 16, heads, key_dim).permute(0, 1, 3, 2, 4).float()
+
     torch.testing.assert_close(aux.q_gamma.float(), raw_q_gamma, atol=1e-3, rtol=2e-3)
     torch.testing.assert_close(aux.aqk.float(), raw_aqk, atol=2e-3, rtol=2e-3)
+    torch.testing.assert_close(saved_residual, expected_residual, atol=2e-6, rtol=2e-5)
 
 
 @pytest.mark.cuda

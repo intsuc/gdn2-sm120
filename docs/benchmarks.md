@@ -163,9 +163,11 @@ is 1.41x, 1.41x, and 1.15x. These rows include the default output and
 final-state allocations on both public paths.
 
 For full-chunk BF16 training at T>=128, forward checkpoints Y, raw Q-gamma,
-K-tail, A-qk, and state boundaries in BF16; U and chunk decay remain FP32. At
+K-tail, A-qk, and state boundaries in BF16; the value auxiliary and chunk decay remain FP32. At
 T>=512, a separate compact Q-effective scratch lets training use the rearranged
 long-forward identity without changing the raw Q-gamma or A-qk checkpoint bits.
+The scan replaces U with FP32 R after its final use so backward can consume the
+residual without another state product.
 The boundary stage precomputes all independent `A_qk.T @ dO` products before
 its reverse scan, stages Y/Q-gamma/K-tail with 128-bit `cp.async`, and shares
 each decay value through warp shuffles. The ordered scan selects V16 when
@@ -279,6 +281,20 @@ differences were `1.22e-4`, `2.44e-4`, and `2.44e-4`. A T=1024 backward-only
 recheck kept all seven gradients bit-identical; its 298.016 versus 298.784 us
 medians were within measurement noise, as expected because the extra
 Q-effective scratch is forward-only.
+
+### Saved forward residual
+
+The saved-R change was measured against clean `f4ed53b` on the same RTX PRO
+6000, with 30 warmups and 200 CUDA-event samples at B1/T1024/H16 BF16. The
+public backward median fell from 306.1--306.2 us to 279.8--280.6 us
+(about 8.5%), while full forward-plus-backward training fell from
+376.3--377.4 us to 364.0 us (about 3.4%). A direct compact-WY VJP A/B on the
+same input measured 190.688 us for the legacy U path and 163.200 us for the
+saved-R path (14.4%).
+
+For an output-only loss at the same shape, specializing the absent terminal
+VJP measured 261.9--263.2 us versus 278.6--279.5 us when a fresh state-sized
+zero terminal VJP was materialized, a 5.5--6.3% reduction.
 
 The exact values behind the per-kernel table and the README light/dark figures
 are tracked in

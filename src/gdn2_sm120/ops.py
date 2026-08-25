@@ -84,6 +84,7 @@ class _ChunkGDN2(torch.autograd.Function):
             )
         if use_parallel_backward:
             output, final_state, aux = forward_result
+            ctx.forward_u_is_residual = aux.u_is_residual
             ctx.save_for_backward(
                 q,
                 k,
@@ -132,13 +133,7 @@ class _ChunkGDN2(torch.autograd.Function):
             d_output = d_output.contiguous()
         if ctx.use_parallel_backward:
             y, u, q_gamma, k_tail, decay_end, aqk, state_boundaries = saved
-            if d_final_state is None:
-                d_final_state = torch.zeros(
-                    (q.shape[0], q.shape[2], _DIM, _DIM),
-                    device=q.device,
-                    dtype=torch.float32,
-                )
-            elif not d_final_state.is_contiguous():
+            if d_final_state is not None and not d_final_state.is_contiguous():
                 d_final_state = d_final_state.contiguous()
             boundary_aux = WYBoundaryAux(y, q_gamma, k_tail, decay_end, aqk)
             use_compact_wy = _use_compact_wy_backward(q.shape[0], q.shape[1], q.shape[2])
@@ -164,6 +159,7 @@ class _ChunkGDN2(torch.autograd.Function):
                     decay_end,
                     aqk,
                     state_boundaries,
+                    u_is_residual=ctx.forward_u_is_residual,
                 )
                 gradients = compact_wy_chunk_vjp_cute(
                     q,

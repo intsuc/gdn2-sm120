@@ -639,6 +639,7 @@ def _wy_boundary_dstate_kernel(
     last_chunk: cutlass.Constexpr,
     scan_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    has_d_final_state: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     store_scan_start_state: cutlass.Constexpr,
 ):
@@ -658,7 +659,9 @@ def _wy_boundary_dstate_kernel(
     dstate = cute.make_rmem_tensor((_DIM // 32,), cutlass.Float32)
     for key_group in cutlass.range_constexpr(_DIM // 32):
         key_idx = lane + 32 * key_group
-        value = d_final_state[batch, head, key_idx, value_idx].to(cutlass.Float32)
+        value = cutlass.Float32(0.0)
+        if cutlass.const_expr(has_d_final_state):
+            value = d_final_state[batch, head, key_idx, value_idx].to(cutlass.Float32)
         dstate[key_group] = value
         boundaries[batch, last_chunk, head, key_idx, value_idx] = value
 
@@ -731,6 +734,7 @@ def _wy_boundary_dstate_mma_kernel(
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    has_d_final_state: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     store_d_initial_state: cutlass.Constexpr,
     value_tile_size: cutlass.Constexpr,
@@ -842,7 +846,10 @@ def _wy_boundary_dstate_mma_kernel(
     )
     t_cg_final = thr_mma.partition_C(g_final)
     t_cr_state = thr_mma.make_fragment_C(t_cg_final)
-    cute.autovec_copy(t_cg_final, t_cr_state)
+    if cutlass.const_expr(has_d_final_state):
+        cute.autovec_copy(t_cg_final, t_cr_state)
+    else:
+        t_cr_state.fill(0.0)
     g_boundary = cute.local_tile(
         boundaries[batch, n_chunks, head, None, None],
         (16, value_tile_size),
@@ -1423,6 +1430,7 @@ def _launch_wy_boundary_dstate(
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    has_d_final_state: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
@@ -1441,6 +1449,7 @@ def _launch_wy_boundary_dstate(
         n_chunks,
         n_chunks,
         heads,
+        has_d_final_state,
         store_d_residual,
         False,
     ).launch(
@@ -1466,6 +1475,7 @@ def _launch_wy_boundary_dstate_mma(
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    has_d_final_state: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     store_d_initial_state: cutlass.Constexpr,
     value_tile_size: cutlass.Constexpr,
@@ -1473,6 +1483,7 @@ def _launch_wy_boundary_dstate_mma(
 ):
     full_chunks = time // _CHUNK_SIZE
     mma_final_state = d_final_state
+    mma_has_final_state = has_d_final_state
     mma_chunks = n_chunks
     if cutlass.const_expr(time % _CHUNK_SIZE != 0):
         # Reverse dependencies require the partial tail to run first.  Its
@@ -1493,6 +1504,7 @@ def _launch_wy_boundary_dstate_mma(
             n_chunks,
             1,
             heads,
+            has_d_final_state,
             store_d_residual,
             True,
         ).launch(
@@ -1501,6 +1513,7 @@ def _launch_wy_boundary_dstate_mma(
             stream=stream,
         )
         mma_final_state = d_initial_state
+        mma_has_final_state = True
         mma_chunks = full_chunks
 
     precompute_a_layout = cute.make_layout((_CHUNK_SIZE, _CHUNK_SIZE), stride=(_CHUNK_SIZE, 1))
@@ -1554,6 +1567,7 @@ def _launch_wy_boundary_dstate_mma(
         time,
         mma_chunks,
         heads,
+        mma_has_final_state,
         store_d_residual,
         store_d_initial_state,
         value_tile_size,
@@ -1585,6 +1599,7 @@ def _launch_wy_boundary_dstate_mma_compact(
     time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
+    has_d_final_state: cutlass.Constexpr,
     store_d_residual: cutlass.Constexpr,
     value_tile_size: cutlass.Constexpr,
     stream: cuda.CUstream,
@@ -1606,6 +1621,7 @@ def _launch_wy_boundary_dstate_mma_compact(
         time,
         n_chunks,
         heads,
+        has_d_final_state,
         store_d_residual,
         True,
         value_tile_size,
@@ -1750,6 +1766,7 @@ def _compile_wy_boundary_dstate(
     heads: int,
     input_dtype,
     aux_dtype,
+    has_d_final_state: bool,
     store_d_residual: bool,
 ):
     from cutlass.cute.runtime import make_fake_stream
@@ -1777,6 +1794,7 @@ def _compile_wy_boundary_dstate(
         time,
         n_chunks,
         heads,
+        has_d_final_state,
         store_d_residual,
         make_fake_stream(),
         options="--enable-tvm-ffi",
@@ -1791,6 +1809,7 @@ def _compile_wy_boundary_dstate_mma(
     heads: int,
     input_dtype,
     aux_dtype,
+    has_d_final_state: bool,
     store_d_residual: bool,
     value_tile_size: int,
 ):
@@ -1821,6 +1840,7 @@ def _compile_wy_boundary_dstate_mma(
         time,
         n_chunks,
         heads,
+        has_d_final_state,
         store_d_residual,
         False,
         value_tile_size,
@@ -1837,6 +1857,7 @@ def _compile_wy_boundary_dstate_mma_compact(
     heads: int,
     input_dtype,
     aux_dtype,
+    has_d_final_state: bool,
     store_d_residual: bool,
     value_tile_size: int,
 ):
@@ -1870,6 +1891,7 @@ def _compile_wy_boundary_dstate_mma_compact(
         time,
         n_chunks,
         heads,
+        has_d_final_state,
         store_d_residual,
         value_tile_size,
         make_fake_stream(),
@@ -1970,7 +1992,7 @@ def _compile_parallel_chunk_vjp_full(
 def wy_boundary_dstate(
     aux: WYBoundaryAux | object,
     do: torch.Tensor,
-    d_final_state: torch.Tensor,
+    d_final_state: torch.Tensor | None,
     *,
     return_d_residual: bool = False,
     compact_boundaries: bool = False,
@@ -1982,6 +2004,8 @@ def wy_boundary_dstate(
     """Run the SM120 compact-WY boundary-gradient scan.
 
     ``aux`` may be either :class:`WYBoundaryAux` or ``ChunkForwardAux``.
+    ``d_final_state=None`` specializes the scan for a zero terminal VJP
+    without allocating, clearing, or reading a state-sized zero tensor.
     By default the boundary tensor is FP32 with shape
     ``[B, C + 1, H, 128, 128]``.  ``compact_boundaries=True`` is available for
     the full-chunk MMA path: it stores boundaries in ``do.dtype`` and appends
@@ -1993,9 +2017,11 @@ def wy_boundary_dstate(
     BF16 boundaries, matching its downstream tensor-core operand contract.
     """
 
-    tensors = (aux.y, aux.q_gamma, aux.k_tail, aux.decay_end, aux.aqk, do, d_final_state)
+    tensors = (aux.y, aux.q_gamma, aux.k_tail, aux.decay_end, aux.aqk, do)
     if any(not isinstance(tensor, torch.Tensor) for tensor in tensors):
         raise TypeError("all compact-WY auxiliaries and gradients must be tensors")
+    if d_final_state is not None and not isinstance(d_final_state, torch.Tensor):
+        raise TypeError("d_final_state must be a tensor or None")
     batch, time, heads, key_dim = aux.y.shape
     n_chunks = math.ceil(time / _CHUNK_SIZE)
     sequence_shape = (batch, time, heads, _DIM)
@@ -2010,7 +2036,9 @@ def wy_boundary_dstate(
         raise ValueError("decay_end has an invalid layout")
     if aux.aqk.shape != (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE):
         raise ValueError("aqk has an invalid layout")
-    if d_final_state.shape != state_shape or d_final_state.dtype != torch.float32:
+    if d_final_state is not None and (
+        d_final_state.shape != state_shape or d_final_state.dtype != torch.float32
+    ):
         raise ValueError("d_final_state must be float32 [B, H, 128, 128]")
     if do.dtype not in (torch.float16, torch.bfloat16):
         raise TypeError("do must use float16 or bfloat16")
@@ -2021,11 +2049,12 @@ def wy_boundary_dstate(
         raise TypeError("compact-WY auxiliaries must use float16, bfloat16, or float32")
     if aux.decay_end.dtype != torch.float32:
         raise TypeError("decay_end must use float32")
-    if any(not tensor.is_cuda or not tensor.is_contiguous() for tensor in tensors):
+    checked_tensors = tensors + ((d_final_state,) if d_final_state is not None else ())
+    if any(not tensor.is_cuda or not tensor.is_contiguous() for tensor in checked_tensors):
         raise ValueError("all inputs must be contiguous CUDA tensors")
-    if any(tensor.device != do.device for tensor in tensors):
+    if any(tensor.device != do.device for tensor in checked_tensors):
         raise ValueError("all inputs must be on the same CUDA device")
-    if any(tensor.data_ptr() % 16 != 0 for tensor in tensors):
+    if any(tensor.data_ptr() % 16 != 0 for tensor in checked_tensors):
         raise ValueError("all inputs must be 16-byte aligned")
     if torch.cuda.get_device_capability(do.device) != (12, 0):
         raise RuntimeError("wy_boundary_dstate requires an SM120 CUDA device")
@@ -2056,9 +2085,6 @@ def wy_boundary_dstate(
             device=do.device,
             dtype=do.dtype if compact_boundaries else torch.float32,
         )
-    residual_arg = d_residual if d_residual is not None else boundaries
-    if compact_boundaries and d_residual is None:
-        residual_arg = d_final_state
     input_dtype = cutlass.BFloat16 if do.dtype == torch.bfloat16 else cutlass.Float16
     aux_dtype = {
         torch.float16: cutlass.Float16,
@@ -2071,6 +2097,22 @@ def wy_boundary_dstate(
     split_scan_state = None
     if use_mma and time % _CHUNK_SIZE != 0:
         split_scan_state = torch.empty(state_shape, device=do.device, dtype=torch.float32)
+    # CuTe launch descriptors remain tensor-only.  In the zero-terminal-VJP
+    # specialization, reuse already-allocated scratch as a shape-compatible
+    # dummy; the constexpr branch guarantees that the kernel never reads it.
+    if d_final_state is None:
+        if d_initial_state is not None:
+            d_final_state_arg = d_initial_state
+        elif split_scan_state is not None:
+            d_final_state_arg = split_scan_state
+        else:
+            d_final_state_arg = boundaries.flatten(0, 1)[:batch]
+    else:
+        d_final_state_arg = d_final_state
+    residual_arg = d_residual if d_residual is not None else boundaries
+    if compact_boundaries and d_residual is None:
+        residual_arg = d_final_state_arg
+    launch_tensors = (*tensors, d_final_state_arg)
     device_index = do.device.index
     if device_index is None:
         raise RuntimeError("do must have a concrete CUDA device index")
@@ -2089,6 +2131,7 @@ def wy_boundary_dstate(
                 heads,
                 input_dtype,
                 aux_dtype,
+                d_final_state is not None,
                 return_d_residual,
                 value_tile_size,
             )
@@ -2100,6 +2143,7 @@ def wy_boundary_dstate(
                 heads,
                 input_dtype,
                 aux_dtype,
+                d_final_state is not None,
                 return_d_residual,
             )
         stream = cuda.CUstream(torch.cuda.current_stream(do.device).cuda_stream)
@@ -2112,7 +2156,7 @@ def wy_boundary_dstate(
             if aqk_do is None:
                 aqk_do = torch.empty(sequence_shape, device=do.device, dtype=torch.float32)
             compiled(
-                *tensors,
+                *launch_tensors,
                 boundaries,
                 residual_arg,
                 aqk_do,
@@ -2121,13 +2165,13 @@ def wy_boundary_dstate(
                     if d_initial_state is not None
                     else split_scan_state
                     if split_scan_state is not None
-                    else d_final_state
+                    else d_final_state_arg
                 ),
                 stream,
             )
         else:
             compiled(
-                *tensors,
+                *launch_tensors,
                 boundaries,
                 residual_arg,
                 stream,

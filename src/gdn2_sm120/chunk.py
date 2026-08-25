@@ -300,6 +300,7 @@ def _inter_chunk_kernel(
     heads: cutlass.Constexpr,
     has_initial_state: cutlass.Constexpr,
     store_state_boundaries: cutlass.Constexpr,
+    checkpoint_residual: cutlass.Constexpr,
     chunk_size: cutlass.Constexpr,
     key_dim: cutlass.Constexpr,
     value_dim: cutlass.Constexpr,
@@ -356,6 +357,12 @@ def _inter_chunk_kernel(
                     r_value = u[batch, token, head, value_idx] - y_state
                     residual[row] = r_value
                     if lane == 0:
+                        if cutlass.const_expr(checkpoint_residual):
+                            # U is partitioned by value column across CTAs, so
+                            # this in-place replacement has no cross-CTA read/
+                            # write hazard.  The compact-WY VJP consumes R
+                            # instead of U through an equivalent dLower form.
+                            u[batch, token, head, value_idx] = r_value
                         chunk_output = q_state
                         for previous in cutlass.range_constexpr(row + 1):
                             chunk_output += (
@@ -397,6 +404,7 @@ def _inter_chunk_k_split_mma_kernel(
     has_initial_state: cutlass.Constexpr,
     store_state_boundaries: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
+    checkpoint_residual: cutlass.Constexpr,
     value_tile: cutlass.Constexpr,
     tiled_mma: cute.TiledMma,
     s_a_layout: cute.Layout,
@@ -670,6 +678,12 @@ def _inter_chunk_k_split_mma_kernel(
                     q_total += s_q_partial_all[source_warp, row, value_local]
             residual_value = u[batch, start + row, head, value_start + value_local] - y_total
             s_residual[value_local, row] = residual_value.to(operand_type)
+            if cutlass.const_expr(checkpoint_residual):
+                # Every value tile owns disjoint U/R columns.  Unlike the
+                # shared Q-effective scan input, U can therefore be replaced
+                # as soon as its value has reached a register without racing
+                # another CTA.
+                u[batch, start + row, head, value_start + value_local] = residual_value
             if cutlass.const_expr(use_algebra):
                 output[batch, start + row, head, value_start + value_local] = (
                     output[batch, start + row, head, value_start + value_local].to(cutlass.Float32)
@@ -803,6 +817,11 @@ def _launch_chunk_forward(
     k_split_value_tile: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
+    # Long BF16 training no longer needs U after the scan.  Preserve the
+    # allocation as an FP32 R checkpoint so backward can skip Y @ S0.  This is
+    # intentionally tied to the algebra schedule: shorter schedules retain
+    # the historical public U auxiliary contract.
+    checkpoint_residual = use_algebra and store_forward_aux
     _prepare_wy_kernel(
         q,
         k,
@@ -852,6 +871,7 @@ def _launch_chunk_forward(
             heads,
             has_initial_state,
             store_state_boundaries,
+            checkpoint_residual,
             _CHUNK_SIZE,
             _KEY_DIM,
             _VALUE_DIM,
@@ -903,6 +923,7 @@ def _launch_chunk_forward(
             has_initial_state,
             store_state_boundaries,
             use_algebra,
+            checkpoint_residual,
             value_tile,
             tiled_mma,
             s_a_layout,
@@ -937,6 +958,7 @@ def _launch_chunk_forward(
                 heads,
                 True,
                 store_state_boundaries,
+                checkpoint_residual,
                 _CHUNK_SIZE,
                 _KEY_DIM,
                 _VALUE_DIM,
@@ -954,9 +976,12 @@ class ChunkForwardAux:
     """WY tensors and state boundaries consumed by checkpointed backward.
 
     Calls at T>=128 checkpoint Y/Q-gamma/K-tail/A-qk in the input dtype and
-    keep U/decay in FP32, including sequences with a partial tail.  Full-chunk
-    BF16 calls also use compact BF16 state checkpoints; FP16, short, and
-    partial-tail specializations keep state boundaries in FP32.
+    keep the value auxiliary/decay in FP32, including sequences with a partial
+    tail. Long BF16 algebra scans replace U in place with
+    ``R = U - Y @ S0`` after its final forward use and set
+    ``u_is_residual``. Full-chunk BF16 calls also use compact BF16 state
+    checkpoints; FP16, short, and partial-tail specializations keep state
+    boundaries in FP32.
     """
 
     y: object
@@ -966,6 +991,7 @@ class ChunkForwardAux:
     decay_end: object
     aqk: object
     state_boundaries: object
+    u_is_residual: bool = False
 
 
 def _fake_tensor(dtype, shape):
@@ -1197,9 +1223,10 @@ def chunk_forward(
                     "final_state_out may exactly alias initial_state but must not "
                     "partially overlap it"
                 )
-    # Long training keeps U in FP32 so residual subtraction preserves its
-    # rounding order, while tensors immediately narrowed by backward MMA are
-    # checkpointed in the input dtype to halve persistent traffic.
+    # Long training prepares U in FP32 so residual subtraction preserves its
+    # rounding order. The algebra scan later reuses that allocation for its
+    # FP32 R checkpoint, while tensors immediately narrowed by backward MMA
+    # are checkpointed in the input dtype to halve persistent traffic.
     y = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     u = torch.empty(v.shape, device=q.device, dtype=u_dtype)
     q_gamma = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
@@ -1269,7 +1296,16 @@ def chunk_forward(
     return (
         output,
         final_state,
-        ChunkForwardAux(y, u, q_gamma, k_tail, decay_end, aqk, state_boundaries),
+        ChunkForwardAux(
+            y,
+            u,
+            q_gamma,
+            k_tail,
+            decay_end,
+            aqk,
+            state_boundaries,
+            u_is_residual=use_algebra and store_forward_aux,
+        ),
     )
 
 

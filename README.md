@@ -238,12 +238,15 @@ accumulators, warp shuffles, value/key partitioning, and
 therefore use a schedule designed for SM120 rather than a direct FROST port.
 
 For long BF16 training, Y, raw Q-gamma, K-tail, A-qk, and the persistent
-E/K-bar MMA operands use BF16, while U, chunk decay, and gamma remain FP32.
+E/K-bar MMA operands use BF16, while the value auxiliary, chunk decay, and
+gamma remain FP32.
 When a BF16 sequence contains at least 32 full chunks, including a sequence
 with a partial tail, the forward scan consumes a temporary compact Q-effective
 scratch for the rearranged output identity. Training preserves raw Q-gamma and
-A-qk checkpoint bits for backward; forward-only partial calls retain the
-tail's raw Q-gamma and A-qk for its scalar scan. Backward first precomputes
+A-qk checkpoint bits for backward. After its last use, each value-tile CTA
+safely replaces its disjoint U columns with the FP32 residual checkpoint
+`R = U - Y @ S0`; forward-only partial calls retain the tail's raw Q-gamma and
+A-qk for its scalar scan. Backward first precomputes
 every independent `A_qk.T @ dO` product, then runs a reverse boundary scan
 with 128-bit `cp.async` staging and shuffle-cached decay. The full-chunk BF16
 path emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32;
@@ -251,11 +254,18 @@ partial tails retain FP32 boundaries and `dR`. The ordered scan uses V16 when
 `batch * heads >= 32`, plus the midrange where `16 <= batch * heads < 32` and
 `T <= 2048`; other shapes use V8. V16 halves duplicated Y/Q-gamma/K-tail reads,
 while V8 exposes twice as many CTAs for long underfilled grids; both retain the
-same eight K-split warps. The chunk-local compact-WY graph combines paired
-products and producer epilogues into 12 launches. On the compact BF16 path it
-folds the state/gradient decay dot into a large state-product kernel, reducing
-the local graph to 11 launches, when
+same eight K-split warps. The standard chunk-local compact-WY graph combines
+paired products and producer epilogues into 12 launches. The saved forward R
+skips its `Y @ S0` launch and reduces the paired dLower product to
+`-tril(dZ @ R.T)`, leaving 11. On the compact BF16 path the state/gradient
+decay dot can be folded into a large state-product kernel, reducing the saved-R
+graph to 10 launches when
 `batch * ceil(T / 16) * heads >= 2048`.
+
+When a loss does not consume the final state, the long backward passes a
+zero-terminal specialization into the boundary scan. It initializes the
+terminal register state directly and avoids allocating, clearing, and reading
+a `[B, H, 128, 128]` FP32 zero tensor.
 
 The implementation is independently derived from the paper's equations. No
 source from the official GDN2 repository (NVIDIA Source Code License-NC) is

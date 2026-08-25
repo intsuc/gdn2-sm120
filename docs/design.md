@@ -81,9 +81,12 @@ Forward-only calls use compact FP16/BF16 intermediates that are not exposed. A
 gradient-enabled call at `T >= 128` checkpoints Y, Q-gamma, K-tail, and A-qk
 in the input dtype, including for a partial-tail sequence, because every
 downstream tensor-core consumer would immediately narrow them to that dtype.
-U and chunk decay remain FP32. Full-chunk BF16 sequences also store compact
-BF16 state boundaries; FP16, short, and partial-tail training calls retain FP32
-boundaries. The chunk size differs from the official
+The value auxiliary and chunk decay remain FP32. Once a long algebra scan has
+consumed U, each value-tile CTA replaces its disjoint U columns with
+`R = U - Y @ S0`; `ChunkForwardAux.u_is_residual` records the changed
+contract. Full-chunk BF16 sequences also store compact BF16 state boundaries;
+FP16, short, and partial-tail training calls retain FP32 boundaries. The chunk
+size differs from the official
 Triton path's C=64 because BT=16 exposes more CTAs and stays below the SM120
 shared-memory limit. With at least 32 full BF16 chunks, Q-effective adds one
 temporary input-dtype sequence scratch whose lifetime ends with forward; it is
@@ -135,11 +138,14 @@ At T=64, the parameter VJP selects the full compact-WY graph only when
 `batch * heads >= 16` at T=64. Smaller T=64 grids, and T=65--127, use
 independent chunk-local token VJPs whose inverse reconstruction is reset from
 an FP32 boundary after at most 16 tokens. T>=128 always uses compact-WY. For
-each chunk it forms `R`, `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
-`dK_bar`, and the reverse cumulative gate gradient through 12 ordered CuTe
-launches. On the compact BF16 path, the state-decay dot is folded into the
-shared-S0 product when `batch * ceil(T / 16) * heads >= 2048`, reducing this to
-11 launches. For the canonical H16 sweep that threshold begins at T=2048 for
+each chunk it forms `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
+`dK_bar`, and the reverse cumulative gate gradient. The standard graph uses 12
+ordered CuTe launches. A saved forward R skips the backward `Y @ S0` launch
+and changes the paired dLower expression to the equivalent
+`-tril(dZ @ R.T)`, reducing the graph to 11 launches. On the compact BF16
+path, the state-decay dot is folded into the shared-S0 product when
+`batch * ceil(T / 16) * heads >= 2048`, reducing the saved-R graph to 10
+launches. For the canonical H16 sweep that threshold begins at T=2048 for
 B1, T=1024 for B2, and T=512 for B4. Dual-output S0/square products, paired K16
 products, and producer epilogues remove redundant reads and launch boundaries.
 The large `16x128` and `16x16` products use warp MMA; the triangular transpose
@@ -147,6 +153,11 @@ solve and gate chain accumulate in FP32. The boundary scan stores `dR`,
 avoiding two duplicate matrix products; compact BF16 scans round only the
 returned `dR` while keeping the ordered boundary recurrence and its precompute
 scratch in FP32.
+
+If PyTorch supplies no final-state VJP, the ordered boundary scan specializes
+`has_d_final_state=False`, initializes its persistent register state to zero,
+and uses already-allocated scratch only as an unread tensor descriptor. This
+removes the state-sized zero allocation, zero fill, and terminal-state read.
 
 The inverse requires `1 - (beta * k).T @ k` to remain nonzero. With normalized
 keys and erase gates below one this is the usual delta-rule operating region.

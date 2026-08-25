@@ -140,7 +140,7 @@ def compact_wy_chunk_vjp_reference(
         w_c = w[:, start:stop].transpose(1, 2).to(compute_dtype)
         do_c = do[:, start:stop].transpose(1, 2).to(compute_dtype)
         y_c = aux.y[:, start:stop].transpose(1, 2).to(compute_dtype)
-        u_c = aux.u[:, start:stop].transpose(1, 2).to(compute_dtype)
+        value_aux_c = aux.u[:, start:stop].transpose(1, 2).to(compute_dtype)
         q_gamma_c = aux.q_gamma[:, start:stop].transpose(1, 2).to(compute_dtype)
         k_tail_c = aux.k_tail[:, start:stop].transpose(1, 2).to(compute_dtype)
         decay_end_c = aux.decay_end[:, chunk].to(compute_dtype)
@@ -154,7 +154,8 @@ def compact_wy_chunk_vjp_reference(
         erase_bar = gamma * beta_c * k_c
         lower = torch.tril(erase_bar @ k_bar.transpose(-1, -2), diagonal=-1)
 
-        residual = u_c - y_c @ state0
+        has_forward_residual = bool(getattr(aux, "u_is_residual", False))
+        residual = value_aux_c if has_forward_residual else value_aux_c - y_c @ state0
         d_q_gamma = do_c @ state0.transpose(-1, -2)
         d_aqk = torch.tril(do_c @ residual.transpose(-1, -2))
         d_k_tail = residual @ dstate1.transpose(-1, -2)
@@ -180,10 +181,15 @@ def compact_wy_chunk_vjp_reference(
         )
         d_z = torch.linalg.solve_triangular(system_t, d_residual, upper=True)
         d_e0 = torch.linalg.solve_triangular(system_t, d_y, upper=True)
-        d_lower = -torch.tril(
-            d_z @ u_c.transpose(-1, -2) + d_e0 @ y_c.transpose(-1, -2),
-            diagonal=-1,
-        )
+        if has_forward_residual:
+            # dE0 = -dZ @ S0.T, hence
+            # dZ @ U.T + dE0 @ Y.T = dZ @ (U - Y @ S0).T.
+            d_lower = -torch.tril(d_z @ residual.transpose(-1, -2), diagonal=-1)
+        else:
+            d_lower = -torch.tril(
+                d_z @ value_aux_c.transpose(-1, -2) + d_e0 @ y_c.transpose(-1, -2),
+                diagonal=-1,
+            )
 
         d_erase = d_e0 + d_lower @ k_bar
         d_k_bar = d_lower.transpose(-1, -2) @ erase_bar
@@ -1197,6 +1203,7 @@ def _launch_compact_wy_chunk_vjp(
     d_initial_state: cute.Tensor,
     has_precomputed_d_residual: cutlass.Constexpr,
     has_precomputed_d_initial_state: cutlass.Constexpr,
+    has_forward_residual: cutlass.Constexpr,
     time: cutlass.Constexpr,
     padded_time: cutlass.Constexpr,
     n_chunks: cutlass.Constexpr,
@@ -1257,7 +1264,10 @@ def _launch_compact_wy_chunk_vjp(
         s_partial_layout,
     ).launch(grid=chunk_grid, block=(_MMA_THREADS, 1, 1), stream=stream)
 
-    if cutlass.const_expr(time % _CHUNK_SIZE == 0):
+    if cutlass.const_expr(has_forward_residual):
+        # Forward already persisted R in the former U allocation.
+        pass
+    elif cutlass.const_expr(time % _CHUNK_SIZE == 0):
         _m16_n128_k128_kernel(
             y,
             state_boundaries,
@@ -1418,24 +1428,46 @@ def _launch_compact_wy_chunk_vjp(
     _transpose_triangular_solve_kernel(
         lower, d_residual, d_y, d_z, d_e0, time, n_chunks, heads
     ).launch(grid=chunk_grid, block=(_CHAIN_THREADS, 1, 1), stream=stream)
-    _m16_n16_k128_kernel(
-        d_z,
-        u,
-        d_e0,
-        y,
-        d_lower,
-        time,
-        n_chunks,
-        heads,
-        False,
-        True,
-        _TRIANGLE_STRICT_LOWER,
-        True,
-        tiled_mma,
-        s_square_a_layout,
-        s_b_layout,
-        s_partial_layout,
-    ).launch(grid=chunk_grid, block=(_MMA_THREADS, 1, 1), stream=stream)
+    if cutlass.const_expr(has_forward_residual):
+        # dE0 = -dZ @ S0.T, so the historical
+        # dZ @ U.T + dE0 @ Y.T pair collapses to dZ @ R.T.
+        _m16_n16_k128_kernel(
+            d_z,
+            residual,
+            d_z,
+            residual,
+            d_lower,
+            time,
+            n_chunks,
+            heads,
+            False,
+            True,
+            _TRIANGLE_STRICT_LOWER,
+            False,
+            tiled_mma,
+            s_square_a_layout,
+            s_b_layout,
+            s_partial_layout,
+        ).launch(grid=chunk_grid, block=(_MMA_THREADS, 1, 1), stream=stream)
+    else:
+        _m16_n16_k128_kernel(
+            d_z,
+            u,
+            d_e0,
+            y,
+            d_lower,
+            time,
+            n_chunks,
+            heads,
+            False,
+            True,
+            _TRIANGLE_STRICT_LOWER,
+            True,
+            tiled_mma,
+            s_square_a_layout,
+            s_b_layout,
+            s_partial_layout,
+        ).launch(grid=chunk_grid, block=(_MMA_THREADS, 1, 1), stream=stream)
     _m16_n128_k16_kernel(
         d_lower,
         k_bar,
@@ -1540,6 +1572,7 @@ def _compile_compact_wy_chunk_vjp(
     precomputed_residual_dtype,
     has_precomputed_d_residual: bool,
     has_precomputed_d_initial_state: bool,
+    has_forward_residual: bool,
     fuse_state_decay_dot: bool,
 ):
     """Compile the staged implementation once per static tensor layout."""
@@ -1585,7 +1618,11 @@ def _compile_compact_wy_chunk_vjp(
         scratch_sequence,  # k_bar
         square,  # lower
         scratch_sequence,  # residual product
-        scratch_sequence,  # residual
+        (
+            _fake_tensor(u_dtype, input_sequence_shape)
+            if has_forward_residual
+            else scratch_sequence
+        ),  # residual or saved forward R
         scratch_sequence,  # d_q_gamma
         square,  # d_aqk
         scratch_sequence,  # d_k_tail
@@ -1609,6 +1646,7 @@ def _compile_compact_wy_chunk_vjp(
         _fake_tensor(f32, state_shape),
         has_precomputed_d_residual,
         has_precomputed_d_initial_state,
+        has_forward_residual,
         time,
         padded_time,
         n_chunks,
@@ -1638,24 +1676,30 @@ def compact_wy_chunk_vjp_cute(
 ) -> tuple[torch.Tensor, ...]:
     """Run the staged SM120 compact-WY VJP implementation.
 
-    The public precomputed-residual schedule uses 12 ordered launches and
-    consumes forward/reverse state boundaries plus the saved compact-WY
-    auxiliaries.  Once the grid reaches 2048 chunk-heads its state-decay dot is
-    fused into the shared-S0 product, leaving 11 launches.  BF16 full chunks use
-    BF16 checkpoints when the boundary scan also supplies an exact FP32
-    ``precomputed_d_initial_state``.  Passing its precomputed ``d_residual``
-    removes two duplicate products; this tensor is BF16 for compact boundaries
-    and FP32 otherwise.  Dual products, paired K16 products, and producer
+    The public precomputed-gradient-residual schedule normally uses 12 ordered
+    launches and consumes forward/reverse state boundaries plus the saved
+    compact-WY auxiliaries. Once the grid reaches 2048 chunk-heads its
+    state-decay dot is fused into the shared-S0 product, leaving 11 launches.
+    A saved forward residual removes one more launch from either schedule.
+    BF16 full chunks use BF16 checkpoints when the boundary scan also supplies
+    an exact FP32 ``precomputed_d_initial_state``. Passing its precomputed
+    ``d_residual`` removes two duplicate products; this tensor is BF16 for
+    compact boundaries and FP32 otherwise. Dual products, paired K16 products, and producer
     epilogues remove additional launch boundaries and operand reads.  All
     large BT=16 products use warp ``m16n8k16`` MMA.  State-dot fusion follows
     total chunk-head work, so multi-batch shapes reach its crossover at shorter
     sequence lengths.
 
+    Long BF16 algebra scans replace their saved FP32 U tensor in place with
+    the forward residual.  That specialization skips the backward ``Y @ S0``
+    product and evaluates ``dLower`` as ``-tril(dZ @ R.T)``, algebraically
+    matching the historical paired U/Y products.
+
     Tensor-core operands are narrowed to the input FP16/BF16 dtype in shared
-    memory.  Long training checkpoints Y/Q-gamma/K-tail/A-qk in that dtype,
-    while U and decay remain FP32.  The VJP is therefore a controlled
-    low-precision approximation rather than a
-    bit-exact FP32 evaluation.  Normalized-key oracle tests cover FP16/BF16,
+    memory. Long training checkpoints Y/Q-gamma/K-tail/A-qk in that dtype,
+    while the U/R value auxiliary and decay remain FP32. The VJP is therefore
+    a controlled low-precision approximation rather than a bit-exact FP32
+    evaluation. Normalized-key oracle tests cover FP16/BF16,
     a partial tail, and the compact long schedule on non-default streams; the
     tests enforce per-gradient relative L2 below 1% and maximum error below
     5e-3.
@@ -1718,6 +1762,7 @@ def compact_wy_chunk_vjp_cute(
         raise TypeError("compact-WY auxiliaries must use float16, bfloat16, or float32")
     if aux.u.dtype not in (torch.float16, torch.bfloat16, torch.float32):
         raise TypeError("u must use float16, bfloat16, or float32")
+    has_forward_residual = bool(getattr(aux, "u_is_residual", False))
     if aux.decay_end.dtype != torch.float32:
         raise TypeError("decay_end must use float32")
     if precomputed_d_residual is not None:
@@ -1824,14 +1869,15 @@ def compact_wy_chunk_vjp_cute(
         tensor.detach() for tensor in aux_tensors
     )
     residual_product = scratch_workspaces[0]
-    residual = scratch_workspaces[1]
+    residual_workspace = scratch_workspaces[1]
+    residual = aux.u.detach() if has_forward_residual else residual_workspace
     d_q_gamma = scratch_workspaces[2]
     # Alias only across disjoint launch intervals; no kernel observes the
     # same storage through two tensor arguments.  Gamma remains FP32; the
     # tensor-core sequence operands and five precomputed-path scratch tensors
     # use the input dtype, keeping T512/H16 at 22 MiB.
     d_k_tail = residual_product
-    d_z = residual
+    d_z = residual_workspace
     if precomputed_d_residual is None:
         d_residual_workspace = scratch_workspaces[3]
         d_y = scratch_workspaces[4]
@@ -1879,6 +1925,7 @@ def compact_wy_chunk_vjp_cute(
             precomputed_residual_dtype,
             precomputed_d_residual is not None,
             precomputed_d_initial_state is not None,
+            has_forward_residual,
             fuse_state_decay_dot,
         )
         stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)

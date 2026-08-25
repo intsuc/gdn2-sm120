@@ -150,8 +150,15 @@ def test_cute_wy_boundary_scan_matches_reference(time: int) -> None:
         chunk_size=16,
         return_d_residual=True,
     )
+    expected_zero_terminal = boundary_dstate_wy_reference(
+        aux,
+        do,
+        torch.zeros_like(d_final_state),
+        chunk_size=16,
+    )
 
     default_result = wy_boundary_dstate(aux, do, d_final_state)
+    zero_terminal_result = wy_boundary_dstate(aux, do, None)
     torch.cuda.synchronize()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
@@ -165,6 +172,7 @@ def test_cute_wy_boundary_scan_matches_reference(time: int) -> None:
 
     assert isinstance(default_result, torch.Tensor)
     torch.testing.assert_close(default_result, expected, atol=2e-5, rtol=2e-4)
+    torch.testing.assert_close(zero_terminal_result, expected_zero_terminal, atol=2e-5, rtol=2e-4)
     torch.testing.assert_close(actual, expected, atol=2e-5, rtol=2e-4)
     assert d_residual.shape == do.shape
     assert d_residual.dtype == torch.float32
@@ -312,8 +320,15 @@ def test_cute_mma_boundary_scan_matches_reference(
         chunk_size=16,
         return_d_residual=True,
     )
+    expected_zero_terminal = boundary_dstate_wy_reference(
+        aux,
+        do,
+        torch.zeros_like(d_final_state),
+        chunk_size=16,
+    )
 
     default_result = wy_boundary_dstate(aux, do, d_final_state)
+    zero_terminal_result = wy_boundary_dstate(aux, do, None)
     if time == 64:
         with pytest.raises(ValueError, match="compact boundaries require T >= 128"):
             wy_boundary_dstate(
@@ -336,6 +351,12 @@ def test_cute_mma_boundary_scan_matches_reference(
     atol = 4e-4 if dtype == torch.bfloat16 else 5e-5
     assert isinstance(default_result, torch.Tensor)
     torch.testing.assert_close(default_result, expected, atol=atol, rtol=2e-3)
+    torch.testing.assert_close(
+        zero_terminal_result,
+        expected_zero_terminal,
+        atol=atol,
+        rtol=2e-3,
+    )
     torch.testing.assert_close(actual, expected, atol=atol, rtol=2e-3)
     residual_atol = 1e-3 if dtype == torch.bfloat16 else 2e-4
     torch.testing.assert_close(d_residual, expected_d_residual, atol=residual_atol, rtol=3e-3)
@@ -361,6 +382,39 @@ def test_cute_mma_boundary_scan_matches_reference(
             atol=4e-3,
             rtol=3e-3,
         )
+        compact_zero, compact_zero_residual, exact_zero_d_initial = wy_boundary_dstate(
+            aux,
+            do,
+            None,
+            return_d_residual=True,
+            compact_boundaries=True,
+        )
+        compact_zero_only, exact_zero_only_d_initial = wy_boundary_dstate(
+            aux,
+            do,
+            None,
+            compact_boundaries=True,
+        )
+        torch.testing.assert_close(
+            compact_zero.float(),
+            zero_terminal_result,
+            atol=2e-2,
+            rtol=3e-2,
+        )
+        torch.testing.assert_close(
+            exact_zero_d_initial,
+            zero_terminal_result[:, 0],
+            atol=0,
+            rtol=0,
+        )
+        torch.testing.assert_close(compact_zero_only, compact_zero, atol=0, rtol=0)
+        torch.testing.assert_close(
+            exact_zero_only_d_initial,
+            exact_zero_d_initial,
+            atol=0,
+            rtol=0,
+        )
+        assert compact_zero_residual.dtype == dtype
 
 
 @pytest.mark.cuda
@@ -503,6 +557,19 @@ def test_partial_tail_requires_grad_and_uses_current_stream() -> None:
     )
     torch.cuda.synchronize()
     dstate_reference = boundary_dstate_wy_reference(aux, do, d_final_state, chunk_size=16)
+    zero_terminal_reference = boundary_dstate_wy_reference(
+        aux,
+        do,
+        torch.zeros_like(d_final_state),
+        chunk_size=16,
+    )
+    zero_terminal_actual = wy_boundary_dstate(aux, do, None)
+    torch.testing.assert_close(
+        zero_terminal_actual,
+        zero_terminal_reference,
+        atol=4e-4,
+        rtol=2e-3,
+    )
     expected, _ = parallel_chunk_backward_reference(
         *(tensor.detach() for tensor in base),
         do,
