@@ -251,6 +251,35 @@ def chunk_gdn2(
         isinstance(tensor, torch.Tensor) and tensor.requires_grad
         for tensor in differentiable_inputs
     )
+    if not prepare_backward:
+        if _use_recurrent_kernel(q.shape[0], q.shape[1], q.shape[2], chunk_api=True):
+            recurrent_inputs = tuple(
+                tensor.detach() if tensor.requires_grad else tensor
+                for tensor in (q, k, v, g, beta, w)
+            )
+            recurrent_state = (
+                initial_state.detach()
+                if initial_state is not None and initial_state.requires_grad
+                else initial_state
+            )
+            output, final_state = token_forward(
+                *recurrent_inputs,
+                recurrent_state,
+                scale=output_scale,
+            )
+        else:
+            output, final_state = chunk_forward(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                w,
+                initial_state,
+                scale=output_scale,
+                return_aux=False,
+            )
+        return output, final_state if output_final_state else None
     output, final_state = _ChunkGDN2.apply(
         q,
         k,

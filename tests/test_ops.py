@@ -150,6 +150,11 @@ def test_long_inference_does_not_materialize_backward_aux(monkeypatch) -> None:
         return torch.empty_like(v), final_state
 
     monkeypatch.setattr(ops_module, "chunk_forward", fake_chunk_forward)
+    monkeypatch.setattr(
+        ops_module._ChunkGDN2,
+        "apply",
+        staticmethod(lambda *_args: pytest.fail("inference must bypass autograd.Function")),
+    )
     sequence = torch.zeros(1, 512, 1, 128, dtype=torch.bfloat16)
 
     output, final_state = chunk_gdn2(*([sequence] * 6), output_final_state=True)
@@ -223,6 +228,13 @@ def test_disabled_grad_mode_does_not_materialize_backward_aux(monkeypatch, conte
         return torch.empty_like(v), final_state
 
     monkeypatch.setattr(ops_module, "chunk_forward", fake_chunk_forward)
+    monkeypatch.setattr(
+        ops_module._ChunkGDN2,
+        "apply",
+        staticmethod(
+            lambda *_args: pytest.fail("disabled grad mode must bypass autograd.Function")
+        ),
+    )
     sequence = torch.zeros(1, 512, 1, 128, dtype=torch.bfloat16, requires_grad=True)
 
     with context():

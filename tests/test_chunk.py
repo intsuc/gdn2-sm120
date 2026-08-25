@@ -312,6 +312,7 @@ def test_chunk_forward_long_k_split_uses_current_stream(time: int, dtype: torch.
     [
         (19, torch.bfloat16),
         (32, torch.bfloat16),
+        (64, torch.bfloat16),
         (129, torch.bfloat16),
         (1024, torch.bfloat16),
         (128, torch.float16),
@@ -344,7 +345,7 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
         )
     )
     assert aux.u.dtype == torch.float32
-    assert aux.u_is_residual is (dtype == torch.bfloat16 and time // 16 >= 32)
+    assert aux.u_is_residual is (time == 64 or time >= 128)
     assert aux.decay_end.dtype == torch.float32
     torch.testing.assert_close(
         aux.state_boundaries[:, 0], args[6].to(expected_boundary_dtype), atol=0, rtol=0

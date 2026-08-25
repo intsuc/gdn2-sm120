@@ -1097,16 +1097,21 @@ def _compact_chain_kernel(
         decay_end_gradient = state_decay_dot[batch, chunk, head, key_idx]
         decay_end_value = decay_end[batch, chunk, head, key_idx]
         k_bar_values = cute.make_rmem_tensor((_CHUNK_SIZE,), cutlass.Float32)
+        inv_gamma_values = cute.make_rmem_tensor((_CHUNK_SIZE,), cutlass.Float32)
         for row in cutlass.range_constexpr(_CHUNK_SIZE):
             k_bar_value = cutlass.Float32(0.0)
+            inv_gamma_value = cutlass.Float32(0.0)
             if row < length:
                 token = start + row
+                inv_gamma_value = cutlass.Float32(1.0) / gamma[
+                    batch, token, head, key_idx
+                ]
                 k_bar_value = (
-                    k[batch, token, head, key_idx].to(cutlass.Float32)
-                    / gamma[batch, token, head, key_idx]
+                    k[batch, token, head, key_idx].to(cutlass.Float32) * inv_gamma_value
                 )
                 decay_end_gradient += d_k_tail[batch, token, head, key_idx] * k_bar_value
             k_bar_values[row] = k_bar_value
+            inv_gamma_values[row] = inv_gamma_value
 
         running_gate_gradient = cutlass.Float32(0.0)
         for reverse_row in cutlass.range_constexpr(_CHUNK_SIZE):
@@ -1115,8 +1120,10 @@ def _compact_chain_kernel(
                 token = start + row
                 gamma_value = gamma[batch, token, head, key_idx]
                 # ``k_bar`` is persisted in the MMA operand dtype.  Reuse the
-                # exact FP32 quotient materialized for the decay edge above.
+                # FP32 value materialized for the decay edge above, together
+                # with the reciprocal shared by all reverse-chain consumers.
                 k_bar_value = k_bar_values[row]
+                inv_gamma_value = inv_gamma_values[row]
                 d_q_gamma_value = d_q_gamma[batch, token, head, key_idx]
                 d_k_bar_value = (
                     d_k_bar[batch, token, head, key_idx]
@@ -1131,7 +1138,8 @@ def _compact_chain_kernel(
                     dq.element_type
                 )
                 dk[batch, token, head, key_idx] = (
-                    d_k_bar_value / gamma_value + d_erase_value * gamma_value * beta_value
+                    d_k_bar_value * inv_gamma_value
+                    + d_erase_value * gamma_value * beta_value
                 ).to(dk.element_type)
                 dbeta[batch, token, head, key_idx] = (d_erase_value * gamma_value * k_value).to(
                     dbeta.element_type
@@ -1147,7 +1155,7 @@ def _compact_chain_kernel(
 
                 d_gamma_value = (
                     scale * d_q_gamma_value * q_value
-                    - d_k_bar_value * k_bar_value / gamma_value
+                    - d_k_bar_value * k_bar_value * inv_gamma_value
                     + d_erase_value * beta_value * k_value
                 )
                 if row == length - 1:
@@ -1675,24 +1683,25 @@ def compact_wy_chunk_vjp_cute(
 ) -> tuple[torch.Tensor, ...]:
     """Run the staged SM120 compact-WY VJP implementation.
 
-    The public precomputed-gradient-residual schedule normally uses 12 ordered
+    The standard precomputed-gradient-residual schedule uses 12 ordered
     launches and consumes forward/reverse state boundaries plus the saved
-    compact-WY auxiliaries. Once the grid reaches 2048 chunk-heads its
-    state-decay dot is fused into the shared-S0 product, leaving 11 launches.
-    A saved forward residual removes one more launch from either schedule.
-    BF16 full chunks use BF16 checkpoints when the boundary scan also supplies
-    an exact FP32 ``precomputed_d_initial_state``. Passing its precomputed
+    compact-WY auxiliaries. A saved forward residual removes the ``Y @ S0``
+    launch. Full-chunk compact BF16 also folds the state-decay dot into the
+    shared-S0 product, leaving 10 launches; T=64, FP16, and partial-tail paths
+    retain the separate dot and use 11. BF16 full chunks use BF16 checkpoints
+    when the boundary scan also supplies an exact FP32
+    ``precomputed_d_initial_state``. Passing its precomputed
     ``d_residual`` removes two duplicate products; this tensor is BF16 for
-    compact boundaries and FP32 otherwise. Dual products, paired K16 products, and producer
-    epilogues remove additional launch boundaries and operand reads.  All
-    large BT=16 products use warp ``m16n8k16`` MMA.  State-dot fusion follows
-    total chunk-head work, so multi-batch shapes reach its crossover at shorter
-    sequence lengths.
+    compact boundaries and FP32 otherwise. Dual products, paired K16 products,
+    and producer epilogues remove additional launch boundaries and operand
+    reads. All large BT=16 products use warp ``m16n8k16`` MMA.
 
-    Long BF16 algebra scans replace their saved FP32 U tensor in place with
-    the forward residual.  That specialization skips the backward ``Y @ S0``
-    product and evaluates ``dLower`` as ``-tril(dZ @ R.T)``, algebraically
-    matching the historical paired U/Y products.
+    Training scans at T=64 and T>=128 replace their saved FP32 U tensor in
+    place with the forward residual. That specialization skips the backward
+    ``Y @ S0`` product and evaluates ``dLower`` as ``-tril(dZ @ R.T)``,
+    algebraically matching the historical paired U/Y products. The final
+    parameter chain shares one reciprocal gamma across its K and decay
+    expressions.
 
     Tensor-core operands are narrowed to the input FP16/BF16 dtype in shared
     memory. Long training checkpoints Y/Q-gamma/K-tail/A-qk in that dtype,

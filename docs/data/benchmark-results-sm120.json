@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "suite_id": "rtx-pro-6000-sm120-2026-08-26",
+  "suite_id": "rtx-pro-6000-sm120-2026-08-26-r2",
   "measured_at": "2026-08-26",
   "aggregation": {
     "unit": "independent-process median",
     "default_process_repeats": 1,
-    "adaptive_process_repeats": "3 for short backward and >5% cross-run checks; 5 when the initial spread exceeded 5%; 9 when fewer than 4 of 5 process medians were within 3% of their median"
+    "adaptive_process_repeats": "3 for chunk backward at T<=2048; 5 when either implementation's first-three spread exceeded 5%; 9 when fewer than 4 of either implementation's first 5 medians were within 3% of its median; B2/T8 token uses 3"
   },
   "results": [
     {
@@ -19,27 +19,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 23.04000034928322,
-        "minimum_us": 21.824000403285027,
+        "median_us": 22.08000048995018,
+        "minimum_us": 20.160000771284103,
         "process_medians_us": [
-          23.04000034928322
+          22.08000048995018
         ],
         "process_minimums_us": [
-          21.824000403285027
+          20.160000771284103
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 179.77599799633026,
-        "minimum_us": 176.57600343227386,
+        "median_us": 183.60000103712082,
+        "minimum_us": 172.7679967880249,
         "process_medians_us": [
-          179.77599799633026
+          183.60000103712082
         ],
         "process_minimums_us": [
-          176.57600343227386
+          172.7679967880249
         ]
       },
-      "speedup": 7.802777572523915,
+      "speedup": 8.315217253762619,
       "validation_max_abs": 0.001546524465084076,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -61,27 +61,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 40.41599854826927,
-        "minimum_us": 40.063999593257904,
+        "median_us": 39.36000168323517,
+        "minimum_us": 31.488001346588135,
         "process_medians_us": [
-          40.41599854826927
+          39.36000168323517
         ],
         "process_minimums_us": [
-          40.063999593257904
+          31.488001346588135
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 181.74400180578232,
-        "minimum_us": 179.03999984264374,
+        "median_us": 181.0240000486374,
+        "minimum_us": 178.27199399471283,
         "process_medians_us": [
-          181.74400180578232
+          181.0240000486374
         ],
         "process_minimums_us": [
-          179.03999984264374
+          178.27199399471283
         ]
       },
-      "speedup": 4.496833143655314,
+      "speedup": 4.599186796420844,
       "validation_max_abs": 0.0013564825057983398,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -103,27 +103,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 48.528000712394714,
-        "minimum_us": 43.10400038957596,
+        "median_us": 45.56800052523613,
+        "minimum_us": 36.99199855327606,
         "process_medians_us": [
-          48.528000712394714
+          45.56800052523613
         ],
         "process_minimums_us": [
-          43.10400038957596
+          36.99199855327606
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 182.559996843338,
-        "minimum_us": 179.1359931230545,
+        "median_us": 182.01600015163422,
+        "minimum_us": 179.26399409770966,
         "process_medians_us": [
-          182.559996843338
+          182.01600015163422
         ],
         "process_minimums_us": [
-          179.1359931230545
+          179.26399409770966
         ]
       },
-      "speedup": 3.7619517425680735,
+      "speedup": 3.994381979758613,
       "validation_max_abs": 0.001597568392753601,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -145,27 +145,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 66.94400310516357,
-        "minimum_us": 58.75200033187866,
+        "median_us": 63.040003180503845,
+        "minimum_us": 61.535999178886414,
         "process_medians_us": [
-          66.94400310516357
+          63.040003180503845
         ],
         "process_minimums_us": [
-          58.75200033187866
+          61.535999178886414
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 181.5520003437996,
-        "minimum_us": 173.567995429039,
+        "median_us": 183.53600054979324,
+        "minimum_us": 171.77599668502808,
         "process_medians_us": [
-          181.5520003437996
+          183.53600054979324
         ],
         "process_minimums_us": [
-          173.567995429039
+          171.77599668502808
         ]
       },
-      "speedup": 2.711997967295087,
+      "speedup": 2.9114211816308213,
       "validation_max_abs": 0.0013942867517471313,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -187,27 +187,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 65.0240033864975,
-        "minimum_us": 64.4799992442131,
+        "median_us": 59.888001531362534,
+        "minimum_us": 58.81600081920624,
         "process_medians_us": [
-          65.0240033864975
+          59.888001531362534
         ],
         "process_minimums_us": [
-          64.4799992442131
+          58.81600081920624
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 181.2800019979477,
-        "minimum_us": 178.81600558757782,
+        "median_us": 184.83200669288635,
+        "minimum_us": 182.0479929447174,
         "process_medians_us": [
-          181.2800019979477
+          184.83200669288635
         ],
         "process_minimums_us": [
-          178.81600558757782
+          182.0479929447174
         ]
       },
-      "speedup": 2.7878935863181753,
+      "speedup": 3.086294449082465,
       "validation_max_abs": 0.0014274567365646362,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -229,27 +229,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 103.84000092744827,
-        "minimum_us": 102.4319976568222,
+        "median_us": 94.71999853849411,
+        "minimum_us": 86.01599931716919,
         "process_medians_us": [
-          103.84000092744827
+          94.71999853849411
         ],
         "process_minimums_us": [
-          102.4319976568222
+          86.01599931716919
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 186.24000251293182,
-        "minimum_us": 183.1360012292862,
+        "median_us": 182.46400356292725,
+        "minimum_us": 173.5360026359558,
         "process_medians_us": [
-          186.24000251293182
+          182.46400356292725
         ],
         "process_minimums_us": [
-          183.1360012292862
+          173.5360026359558
         ]
       },
-      "speedup": 1.7935285135740264,
+      "speedup": 1.9263514186898352,
       "validation_max_abs": 0.0013742148876190186,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -271,27 +271,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 173.37599396705627,
-        "minimum_us": 171.00800573825836,
+        "median_us": 160.0160002708435,
+        "minimum_us": 157.85600244998932,
         "process_medians_us": [
-          173.37599396705627
+          160.0160002708435
         ],
         "process_minimums_us": [
-          171.00800573825836
+          157.85600244998932
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 236.76800727844238,
-        "minimum_us": 233.5360050201416,
+        "median_us": 235.71200668811798,
+        "minimum_us": 228.60799729824066,
         "process_medians_us": [
-          236.76800727844238
+          235.71200668811798
         ],
         "process_minimums_us": [
-          233.5360050201416
+          228.60799729824066
         ]
       },
-      "speedup": 1.3656331644358528,
+      "speedup": 1.4730527340337918,
       "validation_max_abs": 0.0013960599899291992,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -313,27 +313,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 445.6320106983185,
-        "minimum_us": 439.4879937171936,
+        "median_us": 415.8879965543747,
+        "minimum_us": 413.59999775886536,
         "process_medians_us": [
-          445.6320106983185
+          415.8879965543747
         ],
         "process_minimums_us": [
-          439.4879937171936
+          413.59999775886536
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 476.4000028371811,
-        "minimum_us": 469.2800045013428,
+        "median_us": 477.1519899368286,
+        "minimum_us": 470.8159863948822,
         "process_medians_us": [
-          476.4000028371811
+          477.1519899368286
         ],
         "process_minimums_us": [
-          469.2800045013428
+          470.8159863948822
         ]
       },
-      "speedup": 1.0690434964280242,
+      "speedup": 1.1473088761638353,
       "validation_max_abs": 0.0013832077383995056,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -355,27 +355,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 971.7600047588348,
-        "minimum_us": 965.8240079879761,
+        "median_us": 904.0960073471069,
+        "minimum_us": 899.1680145263672,
         "process_medians_us": [
-          971.7600047588348
+          904.0960073471069
         ],
         "process_minimums_us": [
-          965.8240079879761
+          899.1680145263672
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1035.6320142745972,
-        "minimum_us": 1031.2960147857666,
+        "median_us": 1035.2960228919983,
+        "minimum_us": 1031.3279628753662,
         "process_medians_us": [
-          1035.6320142745972
+          1035.2960228919983
         ],
         "process_minimums_us": [
-          1031.2960147857666
+          1031.3279628753662
         ]
       },
-      "speedup": 1.0657281728029275,
+      "speedup": 1.1451173486871955,
       "validation_max_abs": 0.0014053136110305786,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -397,27 +397,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1894.1760063171387,
-        "minimum_us": 1887.935996055603,
+        "median_us": 1762.1760368347168,
+        "minimum_us": 1755.9360265731812,
         "process_medians_us": [
-          1894.1760063171387
+          1762.1760368347168
         ],
         "process_minimums_us": [
-          1887.935996055603
+          1755.9360265731812
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 2115.328073501587,
-        "minimum_us": 2111.3600730895996,
+        "median_us": 2116.6239976882935,
+        "minimum_us": 2111.392021179199,
         "process_medians_us": [
-          2115.328073501587
+          2116.6239976882935
         ],
         "process_minimums_us": [
-          2111.3600730895996
+          2111.392021179199
         ]
       },
-      "speedup": 1.1167537052770697,
+      "speedup": 1.201142197739931,
       "validation_max_abs": 0.0015015751123428345,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -439,27 +439,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 3735.6319427490234,
-        "minimum_us": 3728.4159660339355,
+        "median_us": 3476.3360023498535,
+        "minimum_us": 3471.3919162750244,
         "process_medians_us": [
-          3735.6319427490234
+          3476.3360023498535
         ],
         "process_minimums_us": [
-          3728.4159660339355
+          3471.3919162750244
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 4237.231969833374,
-        "minimum_us": 4231.647968292236,
+        "median_us": 4236.080169677734,
+        "minimum_us": 4227.168083190918,
         "process_medians_us": [
-          4237.231969833374
+          4236.080169677734
         ],
         "process_minimums_us": [
-          4231.647968292236
+          4227.168083190918
         ]
       },
-      "speedup": 1.1342744774570128,
+      "speedup": 1.2185473920858991,
       "validation_max_abs": 0.001815885305404663,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -481,27 +481,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 25.087999179959297,
-        "minimum_us": 16.64000004529953,
+        "median_us": 24.09599907696247,
+        "minimum_us": 16.03199914097786,
         "process_medians_us": [
-          25.087999179959297
+          24.09599907696247
         ],
         "process_minimums_us": [
-          16.64000004529953
+          16.03199914097786
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 183.80799889564514,
-        "minimum_us": 180.09600043296814,
+        "median_us": 181.2479943037033,
+        "minimum_us": 179.00800704956055,
         "process_medians_us": [
-          183.80799889564514
+          181.2479943037033
         ],
         "process_minimums_us": [
-          180.09600043296814
+          179.00800704956055
         ]
       },
-      "speedup": 7.326530807704824,
+      "speedup": 7.521912402336933,
       "validation_max_abs": 0.001546524465084076,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -523,27 +523,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 44.51199993491173,
-        "minimum_us": 42.43199899792671,
+        "median_us": 41.439998894929886,
+        "minimum_us": 31.808000057935715,
         "process_medians_us": [
-          44.51199993491173
+          41.439998894929886
         ],
         "process_minimums_us": [
-          42.43199899792671
+          31.808000057935715
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 183.21599811315536,
-        "minimum_us": 175.87199807167053,
+        "median_us": 183.1039935350418,
+        "minimum_us": 172.60800302028656,
         "process_medians_us": [
-          183.21599811315536
+          183.1039935350418
         ],
         "process_minimums_us": [
-          175.87199807167053
+          172.60800302028656
         ]
       },
-      "speedup": 4.1161034862748345,
+      "speedup": 4.418532780353049,
       "validation_max_abs": 0.0013564825057983398,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -565,27 +565,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 56.8000003695488,
-        "minimum_us": 56.32000043988228,
+        "median_us": 53.727999329566956,
+        "minimum_us": 52.60799825191498,
         "process_medians_us": [
-          56.8000003695488
+          53.727999329566956
         ],
         "process_minimums_us": [
-          56.32000043988228
+          52.60799825191498
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 182.15999752283096,
-        "minimum_us": 173.0560064315796,
+        "median_us": 181.2639981508255,
+        "minimum_us": 178.5919964313507,
         "process_medians_us": [
-          182.15999752283096
+          181.2639981508255
         ],
         "process_minimums_us": [
-          173.0560064315796
+          178.5919964313507
         ]
       },
-      "speedup": 3.207042189043528,
+      "speedup": 3.373734373374935,
       "validation_max_abs": 0.001622132956981659,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -607,27 +607,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 81.34400099515915,
-        "minimum_us": 80.35200089216232,
+        "median_us": 76.22399926185608,
+        "minimum_us": 75.23199915885925,
         "process_medians_us": [
-          81.34400099515915
+          76.22399926185608
         ],
         "process_minimums_us": [
-          80.35200089216232
+          75.23199915885925
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 182.17599391937256,
-        "minimum_us": 172.19200730323792,
+        "median_us": 182.8480064868927,
+        "minimum_us": 179.51999604701996,
         "process_medians_us": [
-          182.17599391937256
+          182.8480064868927
         ],
         "process_minimums_us": [
-          172.19200730323792
+          179.51999604701996
         ]
       },
-      "speedup": 2.2395750355359825,
+      "speedup": 2.398824625545373,
       "validation_max_abs": 0.0013951612636446953,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -649,27 +649,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 97.75999933481216,
-        "minimum_us": 97.4079966545105,
+        "median_us": 90.59199690818787,
+        "minimum_us": 87.48800307512283,
         "process_medians_us": [
-          97.75999933481216
+          90.59199690818787
         ],
         "process_minimums_us": [
-          97.4079966545105
+          87.48800307512283
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 185.90399622917175,
-        "minimum_us": 180.03199994564056,
+        "median_us": 183.16799402236938,
+        "minimum_us": 176.96000635623932,
         "process_medians_us": [
-          185.90399622917175
+          183.16799402236938
         ],
         "process_minimums_us": [
-          180.03199994564056
+          176.96000635623932
         ]
       },
-      "speedup": 1.9016366355781231,
+      "speedup": 2.02190039157658,
       "validation_max_abs": 0.0015075663104653358,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -691,27 +691,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 163.2000058889389,
-        "minimum_us": 156.25600516796112,
+        "median_us": 149.88799393177032,
+        "minimum_us": 142.56000518798828,
         "process_medians_us": [
-          163.2000058889389
+          149.88799393177032
         ],
         "process_minimums_us": [
-          156.25600516796112
+          142.56000518798828
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 222.46399521827698,
-        "minimum_us": 212.51200139522552,
+        "median_us": 221.53599560260773,
+        "minimum_us": 218.1439995765686,
         "process_medians_us": [
-          222.46399521827698
+          221.53599560260773
         ],
         "process_minimums_us": [
-          212.51200139522552
+          218.1439995765686
         ]
       },
-      "speedup": 1.363137176414494,
+      "speedup": 1.47801027815111,
       "validation_max_abs": 0.0013539008796215057,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -733,27 +733,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 369.56799030303955,
-        "minimum_us": 360.00001430511475,
+        "median_us": 337.95198798179626,
+        "minimum_us": 329.21600341796875,
         "process_medians_us": [
-          369.56799030303955
+          337.95198798179626
         ],
         "process_minimums_us": [
-          360.00001430511475
+          329.21600341796875
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 434.4799965620041,
-        "minimum_us": 425.79200863838196,
+        "median_us": 434.30399894714355,
+        "minimum_us": 427.2319972515106,
         "process_medians_us": [
-          434.4799965620041
+          434.30399894714355
         ],
         "process_minimums_us": [
-          425.79200863838196
+          427.2319972515106
         ]
       },
-      "speedup": 1.1756429343508288,
+      "speedup": 1.28510561970873,
       "validation_max_abs": 0.00146513432264328,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -775,27 +775,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 804.720014333725,
-        "minimum_us": 794.5280075073242,
+        "median_us": 729.1679978370667,
+        "minimum_us": 721.7280268669128,
         "process_medians_us": [
-          804.720014333725
+          729.1679978370667
         ],
         "process_minimums_us": [
-          794.5280075073242
+          721.7280268669128
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 948.3839869499207,
-        "minimum_us": 945.1839923858643,
+        "median_us": 948.1920003890991,
+        "minimum_us": 940.7680034637451,
         "process_medians_us": [
-          948.3839869499207
+          948.1920003890991
         ],
         "process_minimums_us": [
-          945.1839923858643
+          940.7680034637451
         ]
       },
-      "speedup": 1.1785266553052536,
+      "speedup": 1.3003752265619501,
       "validation_max_abs": 0.0013697370886802673,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -817,27 +817,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1552.3359775543213,
-        "minimum_us": 1539.903998374939,
+        "median_us": 1437.7280473709106,
+        "minimum_us": 1423.967957496643,
         "process_medians_us": [
-          1552.3359775543213
+          1437.7280473709106
         ],
         "process_minimums_us": [
-          1539.903998374939
+          1423.967957496643
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1963.8559818267822,
-        "minimum_us": 1957.8560590744019,
+        "median_us": 1962.8000259399414,
+        "minimum_us": 1958.6559534072876,
         "process_medians_us": [
-          1963.8559818267822
+          1962.8000259399414
         ],
         "process_minimums_us": [
-          1957.8560590744019
+          1958.6559534072876
         ]
       },
-      "speedup": 1.2650972535731624,
+      "speedup": 1.3652095259108281,
       "validation_max_abs": 0.0014756545424461365,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -859,27 +859,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 3067.8240060806274,
-        "minimum_us": 3058.5920810699463,
+        "median_us": 2793.056011199951,
+        "minimum_us": 2779.968023300171,
         "process_medians_us": [
-          3067.8240060806274
+          2793.056011199951
         ],
         "process_minimums_us": [
-          3058.5920810699463
+          2779.968023300171
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 3964.8319482803345,
-        "minimum_us": 3957.5679302215576,
+        "median_us": 3964.576005935669,
+        "minimum_us": 3957.792043685913,
         "process_medians_us": [
-          3964.8319482803345
+          3964.576005935669
         ],
         "process_minimums_us": [
-          3957.5679302215576
+          3957.792043685913
         ]
       },
-      "speedup": 1.2923922429780126,
+      "speedup": 1.4194402081583786,
       "validation_max_abs": 0.002112671732902527,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -901,27 +901,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 6155.119895935059,
-        "minimum_us": 6134.655952453613,
+        "median_us": 5697.535991668701,
+        "minimum_us": 5670.688152313232,
         "process_medians_us": [
-          6155.119895935059
+          5697.535991668701
         ],
         "process_minimums_us": [
-          6134.655952453613
+          5670.688152313232
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 7958.623886108398,
-        "minimum_us": 7942.975997924805,
+        "median_us": 7960.399866104126,
+        "minimum_us": 7942.016124725342,
         "process_medians_us": [
-          7958.623886108398
+          7960.399866104126
         ],
         "process_minimums_us": [
-          7942.975997924805
+          7942.016124725342
         ]
       },
-      "speedup": 1.2930087505467445,
+      "speedup": 1.3971653496782341,
       "validation_max_abs": 0.001509256660938263,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -943,27 +943,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 27.23200060427189,
-        "minimum_us": 17.952000722289085,
+        "median_us": 26.1439997702837,
+        "minimum_us": 17.59999990463257,
         "process_medians_us": [
-          27.23200060427189
+          26.1439997702837
         ],
         "process_minimums_us": [
-          17.952000722289085
+          17.59999990463257
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 179.6960011124611,
-        "minimum_us": 176.5120029449463,
+        "median_us": 183.47200006246567,
+        "minimum_us": 180.31999468803406,
         "process_medians_us": [
-          179.6960011124611
+          183.47200006246567
         ],
         "process_minimums_us": [
-          176.5120029449463
+          180.31999468803406
         ]
       },
-      "speedup": 6.598707297482659,
+      "speedup": 7.01774792206842,
       "validation_max_abs": 0.001546524465084076,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -985,27 +985,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 59.84000116586685,
-        "minimum_us": 58.20799991488457,
+        "median_us": 55.80800026655197,
+        "minimum_us": 46.81599885225296,
         "process_medians_us": [
-          59.84000116586685
+          55.80800026655197
         ],
         "process_minimums_us": [
-          58.20799991488457
+          46.81599885225296
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 179.24799770116806,
-        "minimum_us": 169.79199647903442,
+        "median_us": 181.03999644517899,
+        "minimum_us": 172.92800545692444,
         "process_medians_us": [
-          179.24799770116806
+          181.03999644517899
         ],
         "process_minimums_us": [
-          169.79199647903442
+          172.92800545692444
         ]
       },
-      "speedup": 2.9954544486775903,
+      "speedup": 3.243979278606829,
       "validation_max_abs": 0.0015720352530479431,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1027,27 +1027,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 85.4720026254654,
-        "minimum_us": 80.99199831485748,
+        "median_us": 80.38400113582611,
+        "minimum_us": 71.1359977722168,
         "process_medians_us": [
-          85.4720026254654
+          80.38400113582611
         ],
         "process_minimums_us": [
-          80.99199831485748
+          71.1359977722168
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 180.67200481891632,
-        "minimum_us": 169.98399794101715,
+        "median_us": 181.08800053596497,
+        "minimum_us": 178.46399545669556,
         "process_medians_us": [
-          180.67200481891632
+          181.08800053596497
         ],
         "process_minimums_us": [
-          169.98399794101715
+          178.46399545669556
         ]
       },
-      "speedup": 2.113815041992326,
+      "speedup": 2.2527865990394993,
       "validation_max_abs": 0.001622132956981659,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1069,27 +1069,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 136.7039978504181,
-        "minimum_us": 134.14399325847626,
+        "median_us": 129.5360028743744,
+        "minimum_us": 127.3919939994812,
         "process_medians_us": [
-          136.7039978504181
+          129.5360028743744
         ],
         "process_minimums_us": [
-          134.14399325847626
+          127.3919939994812
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 183.21599811315536,
-        "minimum_us": 174.43199455738068,
+        "median_us": 185.55200099945068,
+        "minimum_us": 181.7599982023239,
         "process_medians_us": [
-          183.21599811315536
+          185.55200099945068
         ],
         "process_minimums_us": [
-          174.43199455738068
+          181.7599982023239
         ]
       },
-      "speedup": 1.340238771316921,
+      "speedup": 1.4324357466811857,
       "validation_max_abs": 0.0016800761222839355,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1111,27 +1111,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 145.02400159835815,
-        "minimum_us": 144.6080058813095,
+        "median_us": 133.53599607944489,
+        "minimum_us": 124.60800260305405,
         "process_medians_us": [
-          145.02400159835815
+          133.53599607944489
         ],
         "process_minimums_us": [
-          144.6080058813095
+          124.60800260305405
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 219.31199729442596,
-        "minimum_us": 210.40000021457672,
+        "median_us": 220.32000124454498,
+        "minimum_us": 217.15199947357178,
         "process_medians_us": [
-          219.31199729442596
+          220.32000124454498
         ],
         "process_minimums_us": [
-          210.40000021457672
+          217.15199947357178
         ]
       },
-      "speedup": 1.512246213573718,
+      "speedup": 1.649892221670848,
       "validation_max_abs": 0.0015553757548332214,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1153,27 +1153,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 357.5359880924225,
-        "minimum_us": 351.3599932193756,
+        "median_us": 326.6879916191101,
+        "minimum_us": 318.4640109539032,
         "process_medians_us": [
-          357.5359880924225
+          326.6879916191101
         ],
         "process_minimums_us": [
-          351.3599932193756
+          318.4640109539032
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 415.15199840068817,
-        "minimum_us": 407.51999616622925,
+        "median_us": 415.8720076084137,
+        "minimum_us": 410.7840061187744,
         "process_medians_us": [
-          415.15199840068817
+          415.8720076084137
         ],
         "process_minimums_us": [
-          407.51999616622925
+          410.7840061187744
         ]
       },
-      "speedup": 1.1611474431305977,
+      "speedup": 1.2729944726382365,
       "validation_max_abs": 0.0016023814678192139,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1195,27 +1195,27 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 779.1360020637512,
-        "minimum_us": 762.7840042114258,
+        "median_us": 708.6719870567322,
+        "minimum_us": 696.2559819221497,
         "process_medians_us": [
-          779.1360020637512
+          708.6719870567322
         ],
         "process_minimums_us": [
-          762.7840042114258
+          696.2559819221497
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 926.6560077667236,
-        "minimum_us": 921.6319918632507,
+        "median_us": 927.7120232582092,
+        "minimum_us": 920.1279878616333,
         "process_medians_us": [
-          926.6560077667236
+          927.7120232582092
         ],
         "process_minimums_us": [
-          921.6319918632507
+          920.1279878616333
         ]
       },
-      "speedup": 1.1893379401185749,
+      "speedup": 1.3090852188347357,
       "validation_max_abs": 0.0016404539346694946,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1237,27 +1237,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1494.1120147705078,
-        "minimum_us": 1482.591986656189,
+        "median_us": 1360.1759672164917,
+        "minimum_us": 1349.6639728546143,
         "process_medians_us": [
-          1494.1120147705078
+          1360.1759672164917
         ],
         "process_minimums_us": [
-          1482.591986656189
+          1349.6639728546143
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1919.9519753456116,
-        "minimum_us": 1914.944052696228,
+        "median_us": 1919.9680089950562,
+        "minimum_us": 1909.5040559768677,
         "process_medians_us": [
-          1919.9519753456116
+          1919.9680089950562
         ],
         "process_minimums_us": [
-          1914.944052696228
+          1909.5040559768677
         ]
       },
-      "speedup": 1.2850120716287203,
+      "speedup": 1.411558544828682,
       "validation_max_abs": 0.0014747828245162964,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1279,27 +1279,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 2912.303924560547,
-        "minimum_us": 2886.1119747161865,
+        "median_us": 2659.872055053711,
+        "minimum_us": 2632.672071456909,
         "process_medians_us": [
-          2912.303924560547
+          2659.872055053711
         ],
         "process_minimums_us": [
-          2886.1119747161865
+          2632.672071456909
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 3886.960029602051,
-        "minimum_us": 3878.592014312744,
+        "median_us": 3886.8160247802734,
+        "minimum_us": 3879.6160221099854,
         "process_medians_us": [
-          3886.960029602051
+          3886.8160247802734
         ],
         "process_minimums_us": [
-          3878.592014312744
+          3879.6160221099854
         ]
       },
-      "speedup": 1.334668403535038,
+      "speedup": 1.4612793188286595,
       "validation_max_abs": 0.0020576976239681244,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1321,27 +1321,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 5798.160076141357,
-        "minimum_us": 5766.176223754883,
+        "median_us": 5296.000003814697,
+        "minimum_us": 5279.232025146484,
         "process_medians_us": [
-          5798.160076141357
+          5296.000003814697
         ],
         "process_minimums_us": [
-          5766.176223754883
+          5279.232025146484
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 7808.2239627838135,
-        "minimum_us": 7799.520015716553,
+        "median_us": 7805.16791343689,
+        "minimum_us": 7798.655986785889,
         "process_medians_us": [
-          7808.2239627838135
+          7805.16791343689
         ],
         "process_minimums_us": [
-          7799.520015716553
+          7798.655986785889
         ]
       },
-      "speedup": 1.3466727134550143,
+      "speedup": 1.4737854810828632,
       "validation_max_abs": 0.002277061343193054,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1363,27 +1363,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 11585.344314575195,
-        "minimum_us": 11522.848129272461,
+        "median_us": 10542.49620437622,
+        "minimum_us": 10504.063606262207,
         "process_medians_us": [
-          11585.344314575195
+          10542.49620437622
         ],
         "process_minimums_us": [
-          11522.848129272461
+          10504.063606262207
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 15672.751903533936,
-        "minimum_us": 15651.968002319336,
+        "median_us": 15673.167705535889,
+        "minimum_us": 15656.607627868652,
         "process_medians_us": [
-          15672.751903533936
+          15673.167705535889
         ],
         "process_minimums_us": [
-          15651.968002319336
+          15656.607627868652
         ]
       },
-      "speedup": 1.3528084688701472,
+      "speedup": 1.4866657195503576,
       "validation_max_abs": 0.001828998327255249,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1455,60 +1455,44 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 132.52799957990646,
-        "minimum_us": 126.01600587368011,
+        "median_us": 122.0959983766079,
+        "minimum_us": 119.35999989509583,
         "process_medians_us": [
-          132.47999548912048,
-          131.52000308036804,
-          176.28799378871918,
-          132.52799957990646,
-          177.12000012397766,
-          131.48799538612366,
-          176.32000148296356,
-          131.52000308036804,
-          132.64000415802002
+          122.3360002040863,
+          121.2799996137619,
+          170.49599438905716,
+          121.18399888277054,
+          122.0959983766079
         ],
         "process_minimums_us": [
-          124.06399846076965,
-          129.2800009250641,
-          162.01600432395935,
-          123.23199957609177,
-          167.42399334907532,
-          122.8799968957901,
-          162.91199624538422,
-          123.58400225639343,
-          126.01600587368011
+          120.80000340938568,
+          109.53599959611893,
+          162.59199380874634,
+          119.19999867677689,
+          119.35999989509583
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 280.7680070400238,
-        "minimum_us": 274.81600642204285,
+        "median_us": 279.1520059108734,
+        "minimum_us": 268.48000288009644,
         "process_medians_us": [
-          279.08799052238464,
-          277.77600288391113,
-          398.8319933414459,
-          280.7680070400238,
-          401.2480080127716,
-          279.02400493621826,
-          397.0080018043518,
-          274.84801411628723,
-          393.50399374961853
+          278.4480005502701,
+          281.76000714302063,
+          280.92798590660095,
+          279.1360020637512,
+          279.1520059108734
         ],
         "process_minimums_us": [
-          268.7680125236511,
-          271.4880108833313,
-          384.2880129814148,
-          274.81600642204285,
-          387.10400462150574,
           269.47200298309326,
-          383.83999466896057,
-          264.8319900035858,
-          379.13599610328674
+          265.9839987754822,
+          272.6399898529053,
+          268.48000288009644,
+          267.2959864139557
         ]
       },
-      "speedup": 2.1185561385519707,
-      "validation_max_abs": 0.00244140625,
+      "speedup": 2.2863321453813965,
+      "validation_max_abs": 0.00213623046875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
       "qk_l2_normalized": true,
@@ -1516,7 +1500,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 9
+      "process_repeats": 5
     },
     {
       "mode": "chunk-backward",
@@ -1529,59 +1513,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 124.35200065374374,
-        "minimum_us": 116.64000153541565,
+        "median_us": 117.5680011510849,
+        "minimum_us": 109.47199910879135,
         "process_medians_us": [
-          124.28800016641617,
-          124.22399967908859,
-          124.28800016641617,
-          125.21600723266602,
-          124.41600114107132,
-          125.15200674533844,
-          124.35200065374374,
-          124.35200065374374,
-          125.31200051307678
+          117.5680011510849,
+          117.21599847078323,
+          117.64800176024437
         ],
         "process_minimums_us": [
-          116.80000275373459,
-          115.74400216341019,
-          115.87200313806534,
-          116.73600226640701,
-          116.70400202274323,
-          115.87200313806534,
-          115.84000289440155,
-          116.64000153541565,
-          116.83200299739838
+          108.57599973678589,
+          115.10399729013443,
+          109.47199910879135
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 280.35199642181396,
+        "median_us": 278.01600098609924,
         "minimum_us": 270.33600211143494,
         "process_medians_us": [
-          280.35199642181396,
-          396.65599167346954,
-          396.08000218868256,
-          277.3600071668625,
-          277.536004781723,
-          280.35199642181396,
-          285.2799892425537,
-          275.58399736881256,
-          278.78400683403015
+          280.97599744796753,
+          278.01600098609924,
+          276.7840027809143
         ],
         "process_minimums_us": [
+          271.0080146789551,
           270.33600211143494,
-          381.632000207901,
-          382.4639916419983,
-          270.7520127296448,
-          263.90400528907776,
-          269.9199914932251,
-          275.9360074996948,
-          269.3440020084381,
-          269.3760097026825
+          264.67201113700867
         ]
       },
-      "speedup": 2.254503304715216,
+      "speedup": 2.3647250804989444,
       "validation_max_abs": 0.0020751953125,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1590,7 +1550,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 9
+      "process_repeats": 3
     },
     {
       "mode": "chunk-backward",
@@ -1603,43 +1563,43 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 130.52800297737122,
-        "minimum_us": 120.83200365304947,
+        "median_us": 123.32800030708313,
+        "minimum_us": 115.32799899578094,
         "process_medians_us": [
-          162.36800700426102,
-          130.52800297737122,
-          130.52800297737122,
-          130.46400249004364,
-          131.48799538612366
+          152.24000066518784,
+          123.32800030708313,
+          123.36000055074692,
+          122.36800044775009,
+          123.1519989669323
         ],
         "process_minimums_us": [
-          154.78399395942688,
-          120.99199742078781,
-          120.83200365304947,
-          119.87199634313583,
-          120.67200243473053
+          115.32799899578094,
+          115.77600240707397,
+          114.52800035476685,
+          114.62400108575821,
+          121.21599912643433
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 281.5520018339157,
-        "minimum_us": 275.6800055503845,
+        "median_us": 281.2480032444,
+        "minimum_us": 273.18400144577026,
         "process_medians_us": [
           278.6880135536194,
-          281.96799755096436,
-          397.72801101207733,
-          278.6880135536194,
-          281.5520018339157
+          281.2480032444,
+          282.30398893356323,
+          398.46399426460266,
+          278.75199913978577
         ],
         "process_minimums_us": [
-          266.01600646972656,
-          275.6800055503845,
-          384.6080005168915,
-          271.7120051383972,
-          275.8080065250397
+          273.18400144577026,
+          265.855997800827,
+          272.09600806236267,
+          379.7439932823181,
+          273.5680043697357
         ]
       },
-      "speedup": 2.157023745186131,
+      "speedup": 2.280487825506784,
       "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1661,43 +1621,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 134.49600338935852,
-        "minimum_us": 125.34399330615997,
+        "median_us": 134.64000076055527,
+        "minimum_us": 127.10399925708771,
         "process_medians_us": [
-          134.5279961824417,
-          134.5279961824417,
-          134.44799929857254,
-          133.56800377368927,
-          134.49600338935852
+          134.5600038766861,
+          134.64000076055527,
+          134.65599715709686
         ],
         "process_minimums_us": [
-          125.34399330615997,
-          125.5359947681427,
-          123.6800029873848,
-          123.74400347471237,
-          131.58400356769562
+          131.42399489879608,
+          126.62400305271149,
+          127.10399925708771
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 280.12800216674805,
-        "minimum_us": 271.84000611305237,
+        "median_us": 281.5679907798767,
+        "minimum_us": 273.21600914001465,
         "process_medians_us": [
-          398.5759913921356,
-          401.0400027036667,
-          279.4559895992279,
-          277.9519855976105,
-          280.12800216674805
+          281.8560004234314,
+          281.39200806617737,
+          281.5679907798767
         ],
         "process_minimums_us": [
-          384.0320110321045,
-          338.0480110645294,
-          271.84000611305237,
-          269.24800872802734,
-          271.263986825943
+          275.4879891872406,
+          267.42398738861084,
+          273.21600914001465
         ]
       },
-      "speedup": 2.0827979650502546,
+      "speedup": 2.091265516854974,
       "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1706,7 +1658,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 5
+      "process_repeats": 3
     },
     {
       "mode": "chunk-backward",
@@ -1719,35 +1671,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 258.87998938560486,
-        "minimum_us": 250.8159875869751,
+        "median_us": 258.11201333999634,
+        "minimum_us": 248.416006565094,
         "process_medians_us": [
-          258.5440129041672,
-          258.87998938560486,
-          259.0399980545044
+          258.11201333999634,
+          258.06400179862976,
+          258.11201333999634
         ],
         "process_minimums_us": [
-          251.96799635887146,
-          245.02399563789368,
-          250.8159875869751
+          248.416006565094,
+          245.7599937915802,
+          248.57600033283234
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 397.21599221229553,
-        "minimum_us": 386.3680064678192,
+        "median_us": 396.33598923683167,
+        "minimum_us": 386.9439959526062,
         "process_medians_us": [
-          393.0079936981201,
-          398.20800721645355,
-          397.21599221229553
+          399.2159962654114,
+          396.33598923683167,
+          393.2479918003082
         ],
         "process_minimums_us": [
-          386.3680064678192,
-          388.0639970302582,
-          380.95998764038086
+          390.27199149131775,
+          386.9439959526062,
+          382.78400897979736
         ]
       },
-      "speedup": 1.5343634444477574,
+      "speedup": 1.5355193433587329,
       "validation_max_abs": 0.00201416015625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1769,35 +1721,59 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 556.848019361496,
-        "minimum_us": 549.0239858627319,
+        "median_us": 555.9999942779541,
+        "minimum_us": 546.720027923584,
         "process_medians_us": [
-          556.0320019721985,
-          556.848019361496,
-          557.0560097694397
+          585.8720242977142,
+          555.903971195221,
+          556.0640096664429,
+          587.0720148086548,
+          556.9599866867065,
+          555.9999942779541,
+          554.9439787864685,
+          555.9999942779541,
+          555.1519989967346
         ],
         "process_minimums_us": [
-          541.5040254592896,
-          549.0239858627319,
-          550.7199764251709
+          572.2560286521912,
+          543.2639718055725,
+          546.720027923584,
+          572.6079940795898,
+          548.8319993019104,
+          547.8399991989136,
+          546.6880202293396,
+          545.7919836044312,
+          544.1920161247253
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 708.5760235786438,
-        "minimum_us": 694.4320201873779,
+        "median_us": 707.5520157814026,
+        "minimum_us": 694.0479874610901,
         "process_medians_us": [
-          773.8560140132904,
-          708.5760235786438,
-          705.6799829006195
+          776.0639786720276,
+          705.4080069065094,
+          707.5520157814026,
+          775.0399708747864,
+          706.8159878253937,
+          707.5520157814026,
+          707.647979259491,
+          705.3760290145874,
+          706.4319849014282
         ],
         "process_minimums_us": [
-          694.4320201873779,
-          693.2479739189148,
-          694.4320201873779
+          758.9439749717712,
+          692.0639872550964,
+          692.3199892044067,
+          760.5119943618774,
+          694.1760182380676,
+          694.3359971046448,
+          693.0879950523376,
+          690.1119947433472,
+          694.0479874610901
         ]
       },
-      "speedup": 1.2724765087449268,
+      "speedup": 1.2725755810488102,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1806,7 +1782,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 3
+      "process_repeats": 9
     },
     {
       "mode": "chunk-backward",
@@ -1819,27 +1795,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1241.055965423584,
-        "minimum_us": 1221.3120460510254,
+        "median_us": 1227.903962135315,
+        "minimum_us": 1215.3600454330444,
         "process_medians_us": [
-          1241.055965423584
+          1227.903962135315
         ],
         "process_minimums_us": [
-          1221.3120460510254
+          1215.3600454330444
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1466.3839936256409,
-        "minimum_us": 1460.096001625061,
+        "median_us": 1466.2240147590637,
+        "minimum_us": 1459.1360092163086,
         "process_medians_us": [
-          1466.3839936256409
+          1466.2240147590637
         ],
         "process_minimums_us": [
-          1460.096001625061
+          1459.1360092163086
         ]
       },
-      "speedup": 1.181561536691176,
+      "speedup": 1.1940868829914941,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1861,27 +1837,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 2589.6480083465576,
-        "minimum_us": 2556.9279193878174,
+        "median_us": 2581.3920497894287,
+        "minimum_us": 2546.816110610962,
         "process_medians_us": [
-          2589.6480083465576
+          2581.3920497894287
         ],
         "process_minimums_us": [
-          2556.9279193878174
+          2546.816110610962
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 3129.3280124664307,
-        "minimum_us": 3066.783905029297,
+        "median_us": 3128.335952758789,
+        "minimum_us": 3120.255947113037,
         "process_medians_us": [
-          3129.3280124664307
+          3128.335952758789
         ],
         "process_minimums_us": [
-          3066.783905029297
+          3120.255947113037
         ]
       },
-      "speedup": 1.2083989802399626,
+      "speedup": 1.2118794404026991,
       "validation_max_abs": 0.001953125,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1903,27 +1879,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 5248.431921005249,
-        "minimum_us": 5200.8957862854,
+        "median_us": 5251.567840576172,
+        "minimum_us": 5208.960056304932,
         "process_medians_us": [
-          5248.431921005249
+          5251.567840576172
         ],
         "process_minimums_us": [
-          5200.8957862854
+          5208.960056304932
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 6317.471981048584,
-        "minimum_us": 6292.863845825195,
+        "median_us": 6346.015930175781,
+        "minimum_us": 6298.719882965088,
         "process_medians_us": [
-          6317.471981048584
+          6346.015930175781
         ],
         "process_minimums_us": [
-          6292.863845825195
+          6298.719882965088
         ]
       },
-      "speedup": 1.2036875158396982,
+      "speedup": 1.2084040657617274,
       "validation_max_abs": 0.001953125,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -1945,27 +1921,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 10662.70399093628,
-        "minimum_us": 10625.151634216309,
+        "median_us": 10648.99206161499,
+        "minimum_us": 10618.240356445312,
         "process_medians_us": [
-          10662.70399093628
+          10648.99206161499
         ],
         "process_minimums_us": [
-          10625.151634216309
+          10618.240356445312
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 12600.575923919678,
-        "minimum_us": 12584.383964538574,
+        "median_us": 12638.175964355469,
+        "minimum_us": 12615.743637084961,
         "process_medians_us": [
-          12600.575923919678
+          12638.175964355469
         ],
         "process_minimums_us": [
-          12584.383964538574
+          12615.743637084961
         ]
       },
-      "speedup": 1.1817430114003602,
+      "speedup": 1.186795509962922,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2061,59 +2037,109 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 133.44000279903412,
-        "minimum_us": 130.91200590133667,
+        "median_us": 123.26399981975555,
+        "minimum_us": 112.67200112342834,
         "process_medians_us": [
-          133.37600231170654,
-          172.15999960899353,
-          133.44000279903412,
-          133.2319974899292,
-          133.53599607944489,
-          133.44000279903412,
-          132.49599933624268,
-          177.95200645923615,
-          133.58400017023087
+          123.32800030708313,
+          123.16799908876419,
+          123.26399981975555
         ],
         "process_minimums_us": [
-          130.91200590133667,
-          163.455992937088,
-          130.62399625778198,
-          130.94399869441986,
-          125.21600723266602,
-          122.43200093507767,
-          128.9920061826706,
-          168.09600591659546,
-          131.52000308036804
+          112.22399771213531,
+          121.05599790811539,
+          112.67200112342834
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 279.3920040130615,
-        "minimum_us": 271.84000611305237,
+        "median_us": 278.52800488471985,
+        "minimum_us": 267.2959864139557,
         "process_medians_us": [
-          280.19198775291443,
-          396.64000272750854,
-          275.1519978046417,
-          396.09599113464355,
-          276.70401334762573,
-          278.1600058078766,
-          280.7520031929016,
-          277.2639989852905,
-          279.3920040130615
+          276.2239873409271,
+          280.40000796318054,
+          278.52800488471985
         ],
         "process_minimums_us": [
-          273.6639976501465,
-          383.04001092910767,
-          268.22400093078613,
-          383.29601287841797,
-          264.8960053920746,
-          268.44799518585205,
-          272.92799949645996,
-          267.520010471344,
-          271.84000611305237
+          265.0560140609741,
+          267.2959864139557,
+          271.58400416374207
         ]
       },
-      "speedup": 2.0937649741647326,
+      "speedup": 2.259605442724568,
+      "validation_max_abs": 0.00213623046875,
+      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
+      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
+      "qk_l2_normalized": true,
+      "scale": 0.125,
+      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+      "torch_version": "2.13.0+cu130",
+      "cuda_runtime": "13.0",
+      "process_repeats": 3
+    },
+    {
+      "mode": "chunk-backward",
+      "batch": 2,
+      "time": 128,
+      "heads": 16,
+      "dtype": "bf16",
+      "warmup": 40,
+      "clock_stabilization_ms": 1000,
+      "repeats": 300,
+      "cute": {
+        "implementation": "cute-sm120",
+        "median_us": 123.36000055074692,
+        "minimum_us": 115.55200070142746,
+        "process_medians_us": [
+          123.45600128173828,
+          122.14399874210358,
+          156.70399367809296,
+          156.62399679422379,
+          122.19199910759926,
+          124.30400028824806,
+          122.32000008225441,
+          123.29600006341934,
+          123.36000055074692
+        ],
+        "process_minimums_us": [
+          114.88000303506851,
+          114.656001329422,
+          148.28799664974213,
+          146.2399959564209,
+          114.62400108575821,
+          115.55200070142746,
+          113.3119985461235,
+          121.34400010108948,
+          115.61600118875504
+        ]
+      },
+      "triton": {
+        "implementation": "official-triton",
+        "median_us": 281.823992729187,
+        "minimum_us": 274.84801411628723,
+        "process_medians_us": [
+          281.823992729187,
+          280.40000796318054,
+          397.0080018043518,
+          399.9679982662201,
+          281.23199939727783,
+          279.07198667526245,
+          395.1040059328079,
+          283.34400057792664,
+          280.8320075273514
+        ],
+        "process_minimums_us": [
+          275.55200457572937,
+          274.4640111923218,
+          384.5439851284027,
+          384.4799995422363,
+          273.6639976501465,
+          272.7360129356384,
+          379.2960047721863,
+          274.84801411628723,
+          274.4959890842438
+        ]
+      },
+      "speedup": 2.2845654302121403,
       "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2127,56 +2153,6 @@
     {
       "mode": "chunk-backward",
       "batch": 2,
-      "time": 128,
-      "heads": 16,
-      "dtype": "bf16",
-      "warmup": 40,
-      "clock_stabilization_ms": 1000,
-      "repeats": 300,
-      "cute": {
-        "implementation": "cute-sm120",
-        "median_us": 130.62399625778198,
-        "minimum_us": 120.95999717712402,
-        "process_medians_us": [
-          162.91199624538422,
-          130.62399625778198,
-          130.5920034646988
-        ],
-        "process_minimums_us": [
-          151.8400013446808,
-          120.95999717712402,
-          119.9679970741272
-        ]
-      },
-      "triton": {
-        "implementation": "official-triton",
-        "median_us": 279.4400006532669,
-        "minimum_us": 266.55998826026917,
-        "process_medians_us": [
-          277.5840014219284,
-          279.4400006532669,
-          286.46399080753326
-        ],
-        "process_minimums_us": [
-          266.55998826026917,
-          273.27999472618103,
-          260.8959972858429
-        ]
-      },
-      "speedup": 2.139270031991684,
-      "validation_max_abs": 0.0029296875,
-      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
-      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
-      "qk_l2_normalized": true,
-      "scale": 0.125,
-      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
-      "torch_version": "2.13.0+cu130",
-      "cuda_runtime": "13.0",
-      "process_repeats": 3
-    },
-    {
-      "mode": "chunk-backward",
-      "batch": 2,
       "time": 256,
       "heads": 16,
       "dtype": "bf16",
@@ -2185,43 +2161,59 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 142.81600713729858,
-        "minimum_us": 134.8479986190796,
+        "median_us": 134.36800241470337,
+        "minimum_us": 125.72799623012543,
         "process_medians_us": [
-          142.7839994430542,
-          142.62400567531586,
-          171.21600359678268,
-          143.68000626564026,
-          142.81600713729858
+          164.63999450206757,
+          134.5919966697693,
+          134.36800241470337,
+          132.54399597644806,
+          134.5760002732277,
+          134.68800485134125,
+          133.69600474834442,
+          133.40799510478973,
+          132.57600367069244
         ],
         "process_minimums_us": [
-          132.4480026960373,
-          134.8479986190796,
-          163.455992937088,
-          135.903999209404,
-          134.2719942331314
+          159.58400070667267,
+          125.72799623012543,
+          124.15999919176102,
+          123.29600006341934,
+          125.63200294971466,
+          131.45600259304047,
+          124.12799894809723,
+          130.36799430847168,
+          130.46400249004364
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 280.2239954471588,
-        "minimum_us": 271.0399925708771,
+        "median_us": 279.34400737285614,
+        "minimum_us": 270.2080011367798,
         "process_medians_us": [
-          280.2239954471588,
-          280.35199642181396,
-          392.15999841690063,
-          276.63999795913696,
-          278.4320116043091
+          399.1360068321228,
+          281.23199939727783,
+          279.34400737285614,
+          397.20000326633453,
+          278.59199047088623,
+          393.8240110874176,
+          278.7199914455414,
+          276.528000831604,
+          276.99199318885803
         ],
         "process_minimums_us": [
-          271.0399925708771,
-          273.79199862480164,
-          378.04800271987915,
+          384.8319947719574,
+          274.4320034980774,
           270.2080011367798,
-          269.1839933395386
+          381.28000497817993,
+          269.53598856925964,
+          276.99199318885803,
+          269.4079875946045,
+          269.76001262664795,
+          268.22400093078613
         ]
       },
-      "speedup": 1.9621329643935552,
+      "speedup": 2.078947385931285,
       "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2230,7 +2222,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 5
+      "process_repeats": 9
     },
     {
       "mode": "chunk-backward",
@@ -2243,94 +2235,36 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 242.68800020217896,
-        "minimum_us": 233.0559939146042,
+        "median_us": 242.576003074646,
+        "minimum_us": 229.91999983787537,
         "process_medians_us": [
-          270.60800790786743,
-          242.5920069217682,
-          242.51200258731842,
-          243.05599927902222,
-          242.68800020217896
+          240.6720072031021,
+          242.576003074646,
+          242.65600740909576
         ],
         "process_minimums_us": [
-          257.60000944137573,
-          236.41599714756012,
-          232.16000199317932,
-          233.0559939146042,
-          232.5119972229004
+          235.29599606990814,
+          229.40799593925476,
+          229.91999983787537
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 391.56799018383026,
-        "minimum_us": 378.7840008735657,
+        "median_us": 389.6639943122864,
+        "minimum_us": 373.82400035858154,
         "process_medians_us": [
-          462.12799847126007,
-          387.63199746608734,
-          385.96799969673157,
-          393.0719941854477,
-          391.56799018383026
+          388.12799751758575,
+          391.03999733924866,
+          389.6639943122864
         ],
         "process_minimums_us": [
-          451.07200741767883,
-          376.8320083618164,
-          376.8320083618164,
-          380.99199533462524,
-          378.7840008735657
+          373.82400035858154,
+          376.76799297332764,
+          372.5759983062744
         ]
       },
-      "speedup": 1.6134625109507768,
+      "speedup": 1.6063583758216107,
       "validation_max_abs": 0.00390625,
-      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
-      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
-      "qk_l2_normalized": true,
-      "scale": 0.125,
-      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
-      "torch_version": "2.13.0+cu130",
-      "cuda_runtime": "13.0",
-      "process_repeats": 5
-    },
-    {
-      "mode": "chunk-backward",
-      "batch": 2,
-      "time": 1024,
-      "heads": 16,
-      "dtype": "bf16",
-      "warmup": 40,
-      "clock_stabilization_ms": 1000,
-      "repeats": 300,
-      "cute": {
-        "implementation": "cute-sm120",
-        "median_us": 522.0800042152405,
-        "minimum_us": 513.9840245246887,
-        "process_medians_us": [
-          522.1760272979736,
-          521.2959945201874,
-          522.0800042152405
-        ],
-        "process_minimums_us": [
-          513.9840245246887,
-          513.9520168304443,
-          514.0159726142883
-        ]
-      },
-      "triton": {
-        "implementation": "official-triton",
-        "median_us": 643.5360014438629,
-        "minimum_us": 627.839982509613,
-        "process_medians_us": [
-          644.0960168838501,
-          643.5360014438629,
-          642.9759860038757
-        ],
-        "process_minimums_us": [
-          628.7680268287659,
-          627.839982509613,
-          624.7680187225342
-        ]
-      },
-      "speedup": 1.2326386688783222,
-      "validation_max_abs": 0.00244140625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
       "qk_l2_normalized": true,
@@ -2343,6 +2277,64 @@
     {
       "mode": "chunk-backward",
       "batch": 2,
+      "time": 1024,
+      "heads": 16,
+      "dtype": "bf16",
+      "warmup": 40,
+      "clock_stabilization_ms": 1000,
+      "repeats": 300,
+      "cute": {
+        "implementation": "cute-sm120",
+        "median_us": 520.1280117034912,
+        "minimum_us": 512.9600167274475,
+        "process_medians_us": [
+          520.1280117034912,
+          520.2239751815796,
+          551.2639880180359,
+          519.2959904670715,
+          519.9999809265137
+        ],
+        "process_minimums_us": [
+          513.0879878997803,
+          507.23201036453247,
+          540.7999753952026,
+          508.35198163986206,
+          512.9600167274475
+        ]
+      },
+      "triton": {
+        "implementation": "official-triton",
+        "median_us": 642.0480012893677,
+        "minimum_us": 626.6880035400391,
+        "process_medians_us": [
+          641.9519782066345,
+          641.8880224227905,
+          719.5999920368195,
+          642.0480012893677,
+          643.9679861068726
+        ],
+        "process_minimums_us": [
+          626.6880035400391,
+          624.127984046936,
+          704.479992389679,
+          625.5679726600647,
+          628.6399960517883
+        ]
+      },
+      "speedup": 1.2344038137584086,
+      "validation_max_abs": 0.00244140625,
+      "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
+      "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
+      "qk_l2_normalized": true,
+      "scale": 0.125,
+      "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+      "torch_version": "2.13.0+cu130",
+      "cuda_runtime": "13.0",
+      "process_repeats": 5
+    },
+    {
+      "mode": "chunk-backward",
+      "batch": 2,
       "time": 2048,
       "heads": 16,
       "dtype": "bf16",
@@ -2351,27 +2343,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1195.9199905395508,
-        "minimum_us": 1185.7279539108276,
+        "median_us": 1186.8480443954468,
+        "minimum_us": 1170.624017715454,
         "process_medians_us": [
-          1195.9199905395508
+          1217.5840139389038,
+          1186.6559982299805,
+          1186.8480443954468
         ],
         "process_minimums_us": [
-          1185.7279539108276
+          1203.3599615097046,
+          1170.624017715454,
+          1168.4160232543945
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1308.6719512939453,
-        "minimum_us": 1296.2559461593628,
+        "median_us": 1308.5280060768127,
+        "minimum_us": 1298.2720136642456,
         "process_medians_us": [
-          1308.6719512939453
+          1357.5040102005005,
+          1308.3200454711914,
+          1308.5280060768127
         ],
         "process_minimums_us": [
-          1296.2559461593628
+          1342.1440124511719,
+          1298.2720136642456,
+          1297.1199750900269
         ]
       },
-      "speedup": 1.0942805218127722,
+      "speedup": 1.1025236231849267,
       "validation_max_abs": 0.0029296875,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2380,7 +2380,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 1
+      "process_repeats": 3
     },
     {
       "mode": "chunk-backward",
@@ -2393,27 +2393,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 2439.7119283676147,
-        "minimum_us": 2412.480115890503,
+        "median_us": 2462.768077850342,
+        "minimum_us": 2434.079885482788,
         "process_medians_us": [
-          2439.7119283676147
+          2462.768077850342
         ],
         "process_minimums_us": [
-          2412.480115890503
+          2434.079885482788
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 2781.696081161499,
-        "minimum_us": 2769.5679664611816,
+        "median_us": 2825.4719972610474,
+        "minimum_us": 2814.1119480133057,
         "process_medians_us": [
-          2781.696081161499
+          2825.4719972610474
         ],
         "process_minimums_us": [
-          2769.5679664611816
+          2814.1119480133057
         ]
       },
-      "speedup": 1.1401739889113476,
+      "speedup": 1.1472748987908339,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2435,27 +2435,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 5067.663908004761,
-        "minimum_us": 5010.367870330811,
+        "median_us": 5043.07222366333,
+        "minimum_us": 4990.848064422607,
         "process_medians_us": [
-          5067.663908004761
+          5043.07222366333
         ],
         "process_minimums_us": [
-          5010.367870330811
+          4990.848064422607
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 5745.61619758606,
-        "minimum_us": 5734.464168548584,
+        "median_us": 5746.095895767212,
+        "minimum_us": 5732.192039489746,
         "process_medians_us": [
-          5745.61619758606
+          5746.095895767212
         ],
         "process_minimums_us": [
-          5734.464168548584
+          5732.192039489746
         ]
       },
-      "speedup": 1.13378004182764,
+      "speedup": 1.139403847679421,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2477,27 +2477,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 10233.61587524414,
-        "minimum_us": 10171.327590942383,
+        "median_us": 10175.727844238281,
+        "minimum_us": 10133.21590423584,
         "process_medians_us": [
-          10233.61587524414
+          10175.727844238281
         ],
         "process_minimums_us": [
-          10171.327590942383
+          10133.21590423584
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 11420.000076293945,
-        "minimum_us": 11395.83969116211,
+        "median_us": 11403.632164001465,
+        "minimum_us": 11385.567665100098,
         "process_medians_us": [
-          11420.000076293945
+          11403.632164001465
         ],
         "process_minimums_us": [
-          11395.83969116211
+          11385.567665100098
         ]
       },
-      "speedup": 1.1159301087233258,
+      "speedup": 1.120669925390983,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2519,27 +2519,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 20539.695739746094,
-        "minimum_us": 20459.360122680664,
+        "median_us": 20441.279411315918,
+        "minimum_us": 20326.303482055664,
         "process_medians_us": [
-          20539.695739746094
+          20441.279411315918
         ],
         "process_minimums_us": [
-          20459.360122680664
+          20326.303482055664
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 23008.655548095703,
-        "minimum_us": 22988.351821899414,
+        "median_us": 23034.39998626709,
+        "minimum_us": 22985.12077331543,
         "process_medians_us": [
-          23008.655548095703
+          23034.39998626709
         ],
         "process_minimums_us": [
-          22988.351821899414
+          22985.12077331543
         ]
       },
-      "speedup": 1.1202043029085362,
+      "speedup": 1.1268570583461457,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2611,35 +2611,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 143.71199905872345,
-        "minimum_us": 135.51999628543854,
+        "median_us": 132.64000415802002,
+        "minimum_us": 124.22399967908859,
         "process_medians_us": [
-          185.7760027050972,
-          143.71199905872345,
-          142.81600713729858
+          132.54399597644806,
+          132.64000415802002,
+          133.34399461746216
         ],
         "process_minimums_us": [
-          175.6799966096878,
-          135.1040005683899,
-          135.51999628543854
+          122.75200337171555,
+          130.5599957704544,
+          124.22399967908859
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 279.05599772930145,
-        "minimum_us": 272.2559869289398,
+        "median_us": 280.0320088863373,
+        "minimum_us": 271.0080146789551,
         "process_medians_us": [
-          399.4559943675995,
-          279.05599772930145,
-          274.1599977016449
+          280.0320088863373,
+          280.239999294281,
+          276.4959931373596
         ],
         "process_minimums_us": [
-          381.6959857940674,
-          272.2559869289398,
-          263.4879946708679
+          268.19199323654175,
+          273.47201108932495,
+          271.0080146789551
         ]
       },
-      "speedup": 1.94177243067417,
+      "speedup": 2.1112183361568846,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2661,59 +2661,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 142.83200353384018,
-        "minimum_us": 133.85599851608276,
+        "median_us": 133.5040032863617,
+        "minimum_us": 124.25599992275238,
         "process_medians_us": [
-          142.7839994430542,
-          142.46399700641632,
-          143.61600577831268,
-          142.84799993038177,
-          142.83200353384018,
-          141.88799262046814,
-          143.74400675296783,
-          143.71199905872345,
-          142.81600713729858
+          133.56800377368927,
+          133.5040032863617,
+          132.6719969511032
         ],
         "process_minimums_us": [
-          132.09599256515503,
-          133.15199315547943,
-          134.91199910640717,
-          134.97599959373474,
-          133.85599851608276,
-          132.51200318336487,
-          133.7279975414276,
-          134.14399325847626,
-          134.17600095272064
+          124.32000041007996,
+          123.61600250005722,
+          124.25599992275238
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 278.9759933948517,
-        "minimum_us": 270.7520127296448,
+        "median_us": 279.9359858036041,
+        "minimum_us": 270.9760069847107,
         "process_medians_us": [
-          277.0559936761856,
-          278.56001257896423,
-          399.56799149513245,
-          395.82400023937225,
-          278.9759933948517,
-          394.81599628925323,
-          279.5040011405945,
-          275.58401226997375,
-          277.74399518966675
+          283.24800729751587,
+          279.9359858036041,
+          278.8960039615631
         ],
         "process_minimums_us": [
-          270.7520127296448,
-          267.5839960575104,
-          382.27200508117676,
-          380.8000087738037,
-          272.12798595428467,
-          381.5999925136566,
-          269.21600103378296,
-          269.50401067733765,
-          270.143985748291
+          275.8080065250397,
+          270.9760069847107,
+          267.87200570106506
         ]
       },
-      "speedup": 1.9531756643654157,
+      "speedup": 2.0968358919031864,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2722,7 +2698,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 9
+      "process_repeats": 3
     },
     {
       "mode": "chunk-backward",
@@ -2735,43 +2711,43 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 258.976012468338,
-        "minimum_us": 251.0719895362854,
+        "median_us": 234.44800078868866,
+        "minimum_us": 227.29599475860596,
         "process_medians_us": [
-          258.08000564575195,
-          258.976012468338,
-          286.8160009384155,
-          257.9520046710968,
-          259.0399980545044
+          260.70401072502136,
+          233.58400166034698,
+          234.44800078868866,
+          234.3679964542389,
+          234.49599742889404
         ],
         "process_minimums_us": [
-          251.71199440956116,
-          251.0719895362854,
-          275.8080065250397,
-          245.85600197315216,
-          245.44000625610352
+          249.11999702453613,
+          227.29599475860596,
+          222.33599424362183,
+          223.7119972705841,
+          227.35999524593353
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 391.31200313568115,
-        "minimum_us": 378.7519931793213,
+        "median_us": 391.29599928855896,
+        "minimum_us": 378.9440095424652,
         "process_medians_us": [
-          391.31200313568115,
-          390.064001083374,
-          460.7840031385422,
-          385.9359920024872,
-          392.1760022640228
+          463.1680101156235,
+          392.2240138053894,
+          390.27200639247894,
+          384.94399189949036,
+          391.29599928855896
         ],
         "process_minimums_us": [
-          378.7519931793213,
-          377.920001745224,
-          447.64798879623413,
-          375.71200728416443,
-          379.71198558807373
+          451.87199115753174,
+          378.9759874343872,
+          378.9440095424652,
+          373.56799840927124,
+          375.10401010513306
         ]
       },
-      "speedup": 1.510997097399213,
+      "speedup": 1.6690097504445758,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2793,35 +2769,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 507.9360008239746,
-        "minimum_us": 500.8320212364197,
+        "median_us": 505.98400831222534,
+        "minimum_us": 496.41600251197815,
         "process_medians_us": [
-          536.6399884223938,
           506.879985332489,
-          507.9360008239746
+          505.9039890766144,
+          505.98400831222534
         ],
         "process_minimums_us": [
-          525.5039930343628,
-          499.7439980506897,
-          500.8320212364197
+          499.1999864578247,
+          496.41600251197815,
+          493.120014667511
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 624.6879994869232,
-        "minimum_us": 609.1200113296509,
+        "median_us": 622.7200031280518,
+        "minimum_us": 607.200026512146,
         "process_medians_us": [
-          700.4479765892029,
-          619.6799874305725,
-          624.6879994869232
+          623.6799955368042,
+          622.7200031280518,
+          620.4479932785034
         ],
         "process_minimums_us": [
-          684.224009513855,
-          605.0559878349304,
-          609.1200113296509
+          610.2079749107361,
+          607.200026512146,
+          605.1520109176636
         ]
       },
-      "speedup": 1.229855726850535,
+      "speedup": 1.2307108384812682,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2843,35 +2819,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 1157.1999788284302,
-        "minimum_us": 1143.8720226287842,
+        "median_us": 1147.808015346527,
+        "minimum_us": 1131.3600540161133,
         "process_medians_us": [
-          1158.2239866256714,
-          1157.088041305542,
-          1157.1999788284302
+          1147.5200057029724,
+          1147.808015346527,
+          1172.0319986343384
         ],
         "process_minimums_us": [
-          1146.399974822998,
-          1141.6000127792358,
-          1143.8720226287842
+          1131.3600540161133,
+          1130.46395778656,
+          1134.4319581985474
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 1253.2800436019897,
-        "minimum_us": 1241.919994354248,
+        "median_us": 1251.3920068740845,
+        "minimum_us": 1241.8880462646484,
         "process_medians_us": [
-          1300.1760244369507,
-          1253.2800436019897,
-          1251.2800097465515
+          1252.1920204162598,
+          1251.2159943580627,
+          1251.3920068740845
         ],
         "process_minimums_us": [
-          1244.2879676818848,
-          1241.919994354248,
-          1241.1839962005615
+          1241.8880462646484,
+          1239.4880056381226,
+          1242.0159578323364
         ]
       },
-      "speedup": 1.0830280561107792,
+      "speedup": 1.0902450498189673,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2893,27 +2869,35 @@
       "repeats": 300,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 2384.864091873169,
-        "minimum_us": 2341.248035430908,
+        "median_us": 2377.6320219039917,
+        "minimum_us": 2339.5519256591797,
         "process_medians_us": [
-          2384.864091873169
+          2375.599980354309,
+          2380.576014518738,
+          2377.6320219039917
         ],
         "process_minimums_us": [
-          2341.248035430908
+          2325.7598876953125,
+          2345.1199531555176,
+          2339.5519256591797
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 2713.632106781006,
-        "minimum_us": 2703.2320499420166,
+        "median_us": 2711.5840911865234,
+        "minimum_us": 2645.983934402466,
         "process_medians_us": [
-          2713.632106781006
+          2714.400053024292,
+          2710.495948791504,
+          2711.5840911865234
         ],
         "process_minimums_us": [
-          2703.2320499420166
+          2645.983934402466,
+          2698.2080936431885,
+          2634.687900543213
         ]
       },
-      "speedup": 1.1378560799452555,
+      "speedup": 1.1404557417657528,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2922,7 +2906,7 @@
       "device": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
       "torch_version": "2.13.0+cu130",
       "cuda_runtime": "13.0",
-      "process_repeats": 1
+      "process_repeats": 3
     },
     {
       "mode": "chunk-backward",
@@ -2935,27 +2919,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 4885.008096694946,
-        "minimum_us": 4840.191841125488,
+        "median_us": 4860.81600189209,
+        "minimum_us": 4818.431854248047,
         "process_medians_us": [
-          4885.008096694946
+          4860.81600189209
         ],
         "process_minimums_us": [
-          4840.191841125488
+          4818.431854248047
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 5464.992046356201,
-        "minimum_us": 5449.471950531006,
+        "median_us": 5508.015871047974,
+        "minimum_us": 5489.664077758789,
         "process_medians_us": [
-          5464.992046356201
+          5508.015871047974
         ],
         "process_minimums_us": [
-          5449.471950531006
+          5489.664077758789
         ]
       },
-      "speedup": 1.1187273261744755,
+      "speedup": 1.133146341870163,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -2977,27 +2961,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 9844.079971313477,
-        "minimum_us": 9799.776077270508,
+        "median_us": 9793.391704559326,
+        "minimum_us": 9742.207527160645,
         "process_medians_us": [
-          9844.079971313477
+          9793.391704559326
         ],
         "process_minimums_us": [
-          9799.776077270508
+          9742.207527160645
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 10968.096256256104,
-        "minimum_us": 10918.304443359375,
+        "median_us": 10958.44841003418,
+        "minimum_us": 10930.879592895508,
         "process_medians_us": [
-          10968.096256256104
+          10958.44841003418
         ],
         "process_minimums_us": [
-          10918.304443359375
+          10930.879592895508
         ]
       },
-      "speedup": 1.1141819538461806,
+      "speedup": 1.1189635563062856,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3019,27 +3003,27 @@
       "repeats": 50,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 19745.360374450684,
-        "minimum_us": 19668.960571289062,
+        "median_us": 19658.17642211914,
+        "minimum_us": 19584.863662719727,
         "process_medians_us": [
-          19745.360374450684
+          19658.17642211914
         ],
         "process_minimums_us": [
-          19668.960571289062
+          19584.863662719727
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 22163.935661315918,
-        "minimum_us": 22147.872924804688,
+        "median_us": 22164.83211517334,
+        "minimum_us": 22126.272201538086,
         "process_medians_us": [
-          22163.935661315918
+          22164.83211517334
         ],
         "process_minimums_us": [
-          22147.872924804688
+          22126.272201538086
         ]
       },
-      "speedup": 1.122488282867439,
+      "speedup": 1.1275121170564804,
       "validation_max_abs": 0.00390625,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3313,27 +3297,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 46.49600014090538,
-        "minimum_us": 44.47999969124794,
+        "median_us": 46.560000628232956,
+        "minimum_us": 44.60800066590309,
         "process_medians_us": [
-          46.49600014090538
+          46.560000628232956
         ],
         "process_minimums_us": [
-          44.47999969124794
+          44.60800066590309
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 71.16799801588058,
-        "minimum_us": 65.63200056552887,
+        "median_us": 71.19999825954437,
+        "minimum_us": 64.83200192451477,
         "process_medians_us": [
-          71.16799801588058
+          71.19999825954437
         ],
         "process_minimums_us": [
-          65.63200056552887
+          64.83200192451477
         ]
       },
-      "speedup": 1.530626243122142,
+      "speedup": 1.5292095639786196,
       "validation_max_abs": 0.0012582838535308838,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3355,27 +3339,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 53.599998354911804,
-        "minimum_us": 52.25599929690361,
+        "median_us": 53.71199920773506,
+        "minimum_us": 52.09600180387497,
         "process_medians_us": [
-          53.599998354911804
+          53.71199920773506
         ],
         "process_minimums_us": [
-          52.25599929690361
+          52.09600180387497
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 120.31999975442886,
-        "minimum_us": 114.23999816179276,
+        "median_us": 120.35199999809265,
+        "minimum_us": 112.89600282907486,
         "process_medians_us": [
-          120.31999975442886
+          120.35199999809265
         ],
         "process_minimums_us": [
-          114.23999816179276
+          112.89600282907486
         ]
       },
-      "speedup": 2.244776183717979,
+      "speedup": 2.240691126253233,
       "validation_max_abs": 0.0008524656295776367,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3657,27 +3641,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 49.50400069355965,
-        "minimum_us": 48.31999912858009,
+        "median_us": 48.608001321554184,
+        "minimum_us": 47.61600121855736,
         "process_medians_us": [
-          49.50400069355965
+          48.608001321554184
         ],
         "process_minimums_us": [
-          48.31999912858009
+          47.61600121855736
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 72.03199714422226,
-        "minimum_us": 70.91200351715088,
+        "median_us": 72.1759982407093,
+        "minimum_us": 71.10399752855301,
         "process_medians_us": [
-          72.03199714422226
+          72.1759982407093
         ],
         "process_minimums_us": [
-          70.91200351715088
+          71.10399752855301
         ]
       },
-      "speedup": 1.4550742593536172,
+      "speedup": 1.484858382949072,
       "validation_max_abs": 0.0012582838535308838,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3699,27 +3683,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 62.94400244951248,
-        "minimum_us": 61.88800185918808,
+        "median_us": 61.76000088453293,
+        "minimum_us": 55.1999993622303,
         "process_medians_us": [
-          62.94400244951248
+          61.76000088453293
         ],
         "process_minimums_us": [
-          61.88800185918808
+          55.1999993622303
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 120.35199999809265,
-        "minimum_us": 119.19999867677689,
+        "median_us": 121.16799876093864,
+        "minimum_us": 113.02399635314941,
         "process_medians_us": [
-          120.35199999809265
+          121.16799876093864
         ],
         "process_minimums_us": [
-          119.19999867677689
+          113.02399635314941
         ]
       },
-      "speedup": 1.9120487308481415,
+      "speedup": 1.9619170502843006,
       "validation_max_abs": 0.0009955987334251404,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -3993,13 +3977,13 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 65.0240033864975,
-        "minimum_us": 64.54399973154068,
+        "median_us": 63.90400230884552,
+        "minimum_us": 62.880001962184906,
         "process_medians_us": [
-          65.0240033864975
+          63.90400230884552
         ],
         "process_minimums_us": [
-          64.54399973154068
+          62.880001962184906
         ]
       },
       "triton": {
@@ -4013,7 +3997,7 @@
           76.99199765920639
         ]
       },
-      "speedup": 1.1889763175039822,
+      "speedup": 1.2098146798724503,
       "validation_max_abs": 0.0012582838535308838,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",
@@ -4035,27 +4019,27 @@
       "repeats": 100,
       "cute": {
         "implementation": "cute-sm120",
-        "median_us": 92.41600334644318,
-        "minimum_us": 87.23200112581253,
+        "median_us": 90.32000228762627,
+        "minimum_us": 84.28800106048584,
         "process_medians_us": [
-          92.41600334644318
+          90.32000228762627
         ],
         "process_minimums_us": [
-          87.23200112581253
+          84.28800106048584
         ]
       },
       "triton": {
         "implementation": "official-triton",
-        "median_us": 132.60799646377563,
-        "minimum_us": 126.65599584579468,
+        "median_us": 132.57600367069244,
+        "minimum_us": 126.78399682044983,
         "process_medians_us": [
-          132.60799646377563
+          132.57600367069244
         ],
         "process_minimums_us": [
-          126.65599584579468
+          126.78399682044983
         ]
       },
-      "speedup": 1.4349029568684473,
+      "speedup": 1.4678476562533833,
       "validation_max_abs": 0.0011187493801116943,
       "official_commit": "95709fc250357c2dd109361c353192f2aa5913f9",
       "fla_commit": "4b02d15d6a68700181b180235be62a9fb95d2a38",

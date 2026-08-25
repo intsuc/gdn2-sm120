@@ -29,9 +29,11 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 
 1. one CTA per `(batch, chunk, head)` accumulates log-decay, forms asymmetric
    decay-normalized key/erase/query factors, builds the causal token products,
-   and solves the unit-lower-triangular WY system. Each of the 256 K/V solve
-   threads keeps its 16 FP32 values private, eliminating the shared solution
-   buffer and a CTA barrier after every row;
+   and solves the unit-lower-triangular WY system. Eight warps cover the sixteen
+   causal-product rows in two passes; the same 256 threads then solve K/V, each
+   keeping its 16 FP32 values private. The 256-thread CTA permits more resident
+   chunks than the former 512-thread layout while retaining the barrier-free
+   private solution;
 2. value CTAs walk chunk boundaries in a runtime loop. Eight warps split K into
    16-row fragments, keep a `16 x Vtile` FP32 state per warp in registers, and
    evaluate the dense products with `m16n8k16` warp MMA;
@@ -81,14 +83,14 @@ Forward-only calls use compact FP16/BF16 intermediates that are not exposed. A
 gradient-enabled call at `T >= 128` checkpoints Y, Q-gamma, K-tail, and A-qk
 in the input dtype, including for a partial-tail sequence, because every
 downstream tensor-core consumer would immediately narrow them to that dtype.
-The value auxiliary and chunk decay remain FP32. Once a long algebra scan has
-consumed U, each value-tile CTA replaces its disjoint U columns with
-`R = U - Y @ S0`; `ChunkForwardAux.u_is_residual` records the changed
-contract. Full-chunk BF16 sequences also store compact BF16 state boundaries;
-FP16, short, and partial-tail training calls retain FP32 boundaries. The chunk
-size differs from the official
-Triton path's C=64 because BT=16 exposes more CTAs and stays below the SM120
-shared-memory limit. With at least 32 full BF16 chunks, Q-effective adds one
+The value auxiliary and chunk decay remain FP32. At T=64 and T>=128, once the
+training scan has consumed U, each value-tile CTA replaces its disjoint U
+columns with `R = U - Y @ S0`; `ChunkForwardAux.u_is_residual` records the
+changed contract. Full-chunk BF16 sequences also store compact BF16 state
+boundaries; FP16, short, and partial-tail training calls retain FP32
+boundaries. The chunk size differs from the official Triton path's C=64 because
+BT=16 exposes more CTAs and stays below the SM120 shared-memory limit. With at
+least 32 full BF16 chunks, Q-effective adds one
 temporary input-dtype sequence scratch whose lifetime ends with forward; it is
 not returned in `ChunkForwardAux`, and the raw Q-gamma/A-qk auxiliaries remain
 bit-identical to the non-rearranged training path.
@@ -143,13 +145,14 @@ each chunk it forms `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
 `dK_bar`, and the reverse cumulative gate gradient. The standard graph uses 12
 ordered CuTe launches. A saved forward R skips the backward `Y @ S0` launch
 and changes the paired dLower expression to the equivalent
-`-tril(dZ @ R.T)`, reducing the graph to 11 launches. The full-chunk compact
-BF16 path always folds the state-decay dot into the shared-S0 product. This
-leaves 11 launches below the saved-R threshold and 10 launches with saved R at
-`T >= 512`. Dual-output S0/square products, paired K16 products, and producer
-epilogues remove redundant reads and launch boundaries.
+`-tril(dZ @ R.T)`, reducing the graph to 11 launches at T=64. The full-chunk
+compact BF16 path also folds the state-decay dot into the shared-S0 product, so
+T>=128 uses 10 launches. Dual-output S0/square products, paired K16 products,
+and producer epilogues remove redundant reads and launch boundaries.
 The large `16x128` and `16x16` products use warp MMA; the triangular transpose
-solve and gate chain accumulate in FP32. The boundary scan stores `dR`,
+solve and gate chain accumulate in FP32. The gate chain stores one reciprocal
+gamma per token in registers and reuses it for the K and decay expressions,
+replacing three divisions with one. The boundary scan stores `dR`,
 avoiding two duplicate matrix products; compact BF16 scans round only the
 returned `dR` while keeping the ordered boundary recurrence and its precompute
 scratch in FP32.
@@ -281,6 +284,8 @@ An incompatible explicit value is rejected before launch, as is a GPU whose
 compute capability is not 12.0. `cute.compile(..., options="--enable-tvm-ffi")`
 produces an executor cached by the static shape/dtype/device specialization.
 Runtime calls pass raw PyTorch tensors and the current PyTorch CUDA stream.
+When no gradient edge is needed, `chunk_gdn2` calls the selected executor
+directly instead of entering and leaving a custom `autograd.Function`.
 The common single-visible-GPU path avoids a redundant device-context guard;
 multi-GPU calls compile and launch inside the input tensor's device context.
 Capability/device-count queries and a bounded set of non-owning CUDA stream

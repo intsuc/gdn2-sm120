@@ -32,7 +32,10 @@ import cutlass.cute as cute
 _CHUNK_SIZE = 16
 _KEY_DIM = 128
 _VALUE_DIM = 128
-_PREPARE_THREADS = 512
+# Eight warps evaluate the sixteen causal rows in two passes, then all 256
+# threads solve one K/V coordinate.  The smaller CTA doubles residency over
+# the former sixteen-warp layout without changing total arithmetic.
+_PREPARE_THREADS = 256
 # A PRO 6000 has 188 SMs.  One value column per warp exposes enough CTAs to
 # fill the device even for B=1/H=16 instead of serializing four columns in a
 # single warp.  Four warps per CTA amortize block scheduling without reducing
@@ -202,31 +205,33 @@ def _prepare_wy_kernel(
 
     cute.arch.sync_threads()
 
-    # Sixteen warps map one-to-one to the sixteen rows. Each lane owns four
-    # key coordinates and reduces both the erase-key and query-key dot product.
-    row = warp
-    for col in cutlass.range_constexpr(chunk_size):
-        lower_value = cutlass.Float32(0.0)
-        aqk_value = cutlass.Float32(0.0)
-        if row < length and col < length:
-            for key_group in cutlass.range_constexpr(key_dim // 32):
-                key_idx = lane + key_group * 32
-                k_bar_value = s_k_bar[col, key_idx]
-                lower_value += s_erase_bar[row, key_idx] * k_bar_value
-                aqk_value += s_q_gamma[row, key_idx] * k_bar_value
-        lower_value = _warp_sum(lower_value)
-        aqk_value = _warp_sum(aqk_value)
-        if lane == 0:
-            strict_lower = lower_value if col < row else cutlass.Float32(0.0)
-            causal = aqk_value if col <= row else cutlass.Float32(0.0)
-            s_lower[row, col] = strict_lower
-            s_aqk[row, col] = causal
-            # AQK remains part of the public training checkpoint contract.
-            if cutlass.const_expr(not use_algebra or store_forward_aux):
-                aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
-            elif cutlass.const_expr(store_partial_tail_original):  # noqa: SIM102
-                if chunk == n_chunks - 1:
+    # Eight warps cover the sixteen rows in two passes.  This preserves the
+    # one-warp reductions while halving CTA size, allowing more independent
+    # chunks to reside on each SM and hide the solve/exp latency below.
+    for row_group in cutlass.range_constexpr(2):
+        row = warp + row_group * (_PREPARE_THREADS // 32)
+        for col in cutlass.range_constexpr(chunk_size):
+            lower_value = cutlass.Float32(0.0)
+            aqk_value = cutlass.Float32(0.0)
+            if row < length and col < length:
+                for key_group in cutlass.range_constexpr(key_dim // 32):
+                    key_idx = lane + key_group * 32
+                    k_bar_value = s_k_bar[col, key_idx]
+                    lower_value += s_erase_bar[row, key_idx] * k_bar_value
+                    aqk_value += s_q_gamma[row, key_idx] * k_bar_value
+            lower_value = _warp_sum(lower_value)
+            aqk_value = _warp_sum(aqk_value)
+            if lane == 0:
+                strict_lower = lower_value if col < row else cutlass.Float32(0.0)
+                causal = aqk_value if col <= row else cutlass.Float32(0.0)
+                s_lower[row, col] = strict_lower
+                s_aqk[row, col] = causal
+                # AQK remains part of the public training checkpoint contract.
+                if cutlass.const_expr(not use_algebra or store_forward_aux):
                     aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
+                elif cutlass.const_expr(store_partial_tail_original):  # noqa: SIM102
+                    if chunk == n_chunks - 1:
+                        aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
 
     cute.arch.sync_threads()
 
@@ -817,11 +822,10 @@ def _launch_chunk_forward(
     k_split_value_tile: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
-    # Long BF16 training no longer needs U after the scan.  Preserve the
-    # allocation as an FP32 R checkpoint so backward can skip Y @ S0.  This is
-    # intentionally tied to the algebra schedule: shorter schedules retain
-    # the historical public U auxiliary contract.
-    checkpoint_residual = use_algebra and store_forward_aux
+    # Training no longer needs U after the scan from the compact-WY crossover
+    # onward.  Preserve the allocation as an FP32 R checkpoint so backward can
+    # skip Y @ S0 even before the long-forward algebra schedule takes over.
+    checkpoint_residual = store_forward_aux and (time == 64 or time >= 128)
     _prepare_wy_kernel(
         q,
         k,
@@ -977,11 +981,10 @@ class ChunkForwardAux:
 
     Calls at T>=128 checkpoint Y/Q-gamma/K-tail/A-qk in the input dtype and
     keep the value auxiliary/decay in FP32, including sequences with a partial
-    tail. Long BF16 algebra scans replace U in place with
-    ``R = U - Y @ S0`` after its final forward use and set
-    ``u_is_residual``. Full-chunk BF16 calls also use compact BF16 state
-    checkpoints; FP16, short, and partial-tail specializations keep state
-    boundaries in FP32.
+    tail. Training scans at T=64 and T>=128 replace U in place with
+    ``R = U - Y @ S0`` after its final forward use and set ``u_is_residual``.
+    Full-chunk BF16 calls also use compact BF16 state checkpoints; FP16, short,
+    and partial-tail specializations keep state boundaries in FP32.
     """
 
     y: object
@@ -1304,7 +1307,7 @@ def chunk_forward(
             decay_end,
             aqk,
             state_boundaries,
-            u_is_residual=use_algebra and store_forward_aux,
+            u_is_residual=return_aux and (time == 64 or time >= 128),
         ),
     )
 

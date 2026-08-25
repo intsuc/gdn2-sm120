@@ -142,7 +142,7 @@ processes that scalar tail first, then scans the full prefix with MMA. At T=64
 the full compact-WY tensor-core VJP is used when the batch/head grid supplies
 at least 64 chunk-head CTAs; smaller T=64 grids retain the chunk-local VJP.
 `T >= 128` always dispatches to compact-WY. Forward-only calls do not allocate
-training checkpoints.
+training checkpoints and bypass the custom autograd wrapper entirely.
 
 Below T=64, the short backward uses one-warp V8 value tiles. Its first kernel
 writes final-form `dq`/`dk`/`dg`/`dbeta` FP32 partials, leaving a sum-only
@@ -203,29 +203,29 @@ Representative BF16 medians on the target workstation are:
 
 | Path | Shape | CuTe SM120 | Official Triton | Speedup |
 |---|---:|---:|---:|---:|
-| chunk forward | B1 T16 H16 | 23.0 us | 179.8 us | **7.80x** |
-| chunk forward | B1 T512 H16 | 65.0 us | 181.3 us | **2.79x** |
-| chunk forward | B1 T2048 H16 | 173.4 us | 236.8 us | **1.37x** |
-| chunk forward | B1 T16384 H16 | 1894.2 us | 2115.3 us | **1.12x** |
-| chunk forward | B1 T32768 H16 | 3735.6 us | 4237.2 us | **1.13x** |
-| chunk forward | B2 T32768 H16 | 6155.1 us | 7958.6 us | **1.29x** |
-| chunk forward | B4 T32768 H16 | 11585.3 us | 15672.8 us | **1.35x** |
+| chunk forward | B1 T16 H16 | 22.1 us | 183.6 us | **8.32x** |
+| chunk forward | B1 T512 H16 | 59.9 us | 184.8 us | **3.09x** |
+| chunk forward | B1 T2048 H16 | 160.0 us | 235.7 us | **1.47x** |
+| chunk forward | B1 T16384 H16 | 1762.2 us | 2116.6 us | **1.20x** |
+| chunk forward | B1 T32768 H16 | 3476.3 us | 4236.1 us | **1.22x** |
+| chunk forward | B2 T32768 H16 | 5697.5 us | 7960.4 us | **1.40x** |
+| chunk forward | B4 T32768 H16 | 10542.5 us | 15673.2 us | **1.49x** |
 | chunk backward | B1 T16 H16 | 113.9 us | 278.0 us | **2.44x** |
-| chunk backward | B1 T64 H16 | 132.5 us | 280.8 us | **2.12x** |
-| chunk backward | B1 T512 H16 | 134.5 us | 280.1 us | **2.08x** |
-| chunk backward | B1 T2048 H16 | 556.8 us | 708.6 us | **1.27x** |
-| chunk backward | B1 T16384 H16 | 5248.4 us | 6317.5 us | **1.20x** |
-| chunk backward | B1 T32768 H16 | 10662.7 us | 12600.6 us | **1.18x** |
-| chunk backward | B2 T8192 H16 | 5067.7 us | 5745.6 us | **1.13x** |
-| chunk backward | B2 T32768 H16 | 20539.7 us | 23008.7 us | **1.12x** |
-| chunk backward | B4 T256 H16 | 259.0 us | 391.3 us | **1.51x** |
-| chunk backward | B4 T16384 H16 | 19745.4 us | 22163.9 us | **1.12x** |
+| chunk backward | B1 T64 H16 | 122.1 us | 279.2 us | **2.29x** |
+| chunk backward | B1 T512 H16 | 134.6 us | 281.6 us | **2.09x** |
+| chunk backward | B1 T2048 H16 | 556.0 us | 707.6 us | **1.27x** |
+| chunk backward | B1 T16384 H16 | 5251.6 us | 6346.0 us | **1.21x** |
+| chunk backward | B1 T32768 H16 | 10649.0 us | 12638.2 us | **1.19x** |
+| chunk backward | B2 T8192 H16 | 5043.1 us | 5746.1 us | **1.14x** |
+| chunk backward | B2 T32768 H16 | 20441.3 us | 23034.4 us | **1.13x** |
+| chunk backward | B4 T256 H16 | 234.4 us | 391.3 us | **1.67x** |
+| chunk backward | B4 T16384 H16 | 19658.2 us | 22164.8 us | **1.13x** |
 | token forward | B1 T1 H16 | 13.1 us | 25.0 us | **1.91x** |
-| token forward | B1 T128 H16 | 53.6 us | 120.3 us | **2.24x** |
+| token forward | B1 T128 H16 | 53.7 us | 120.4 us | **2.24x** |
 | token forward | B2 T1 H16 | 13.1 us | 24.6 us | **1.88x** |
-| token forward | B2 T128 H16 | 62.9 us | 120.4 us | **1.91x** |
+| token forward | B2 T128 H16 | 61.8 us | 121.2 us | **1.96x** |
 | token forward | B4 T1 H16 | 14.8 us | 24.7 us | **1.67x** |
-| token forward | B4 T128 H16 | 92.4 us | 132.6 us | **1.43x** |
+| token forward | B4 T128 H16 | 90.3 us | 132.6 us | **1.47x** |
 
 ## Why FROST is not copied directly
 
@@ -243,10 +243,10 @@ gamma remain FP32.
 When a BF16 sequence contains at least 32 full chunks, including a sequence
 with a partial tail, the forward scan consumes a temporary compact Q-effective
 scratch for the rearranged output identity. Training preserves raw Q-gamma and
-A-qk checkpoint bits for backward. After its last use, each value-tile CTA
-safely replaces its disjoint U columns with the FP32 residual checkpoint
-`R = U - Y @ S0`; forward-only partial calls retain the tail's raw Q-gamma and
-A-qk for its scalar scan. Backward first precomputes
+A-qk checkpoint bits for backward. At T=64 and T>=128, each training value-tile
+CTA safely replaces its disjoint U columns after their last use with the FP32
+residual checkpoint `R = U - Y @ S0`; forward-only partial calls retain the
+tail's raw Q-gamma and A-qk for its scalar scan. Backward first precomputes
 every independent `A_qk.T @ dO` product, then runs a reverse boundary scan
 with 128-bit `cp.async` staging and shuffle-cached decay. The full-chunk BF16
 path emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32;
@@ -257,9 +257,11 @@ duplicated Y/Q-gamma/K-tail reads, while V8 exposes twice as many CTAs for long
 underfilled grids; both retain the same eight K-split warps. The standard
 chunk-local compact-WY graph combines paired products and producer epilogues
 into 12 launches. The saved forward R skips its `Y @ S0` launch and reduces the
-paired dLower product to
-`-tril(dZ @ R.T)`. Full-chunk BF16 also folds the state/gradient decay dot into
-the shared-S0 product, so the saved-R graph uses 10 launches at `T >= 512`.
+paired dLower product to `-tril(dZ @ R.T)`. T=64 therefore uses 11 launches,
+while full-chunk BF16 folds the state/gradient decay dot into the shared-S0
+product and uses 10 launches at `T >= 128`. The final gate chain computes one
+reciprocal gamma per token and reuses it across the K and decay gradients
+instead of issuing three divisions.
 
 When a loss does not consume the final state, the long backward passes a
 zero-terminal specialization into the boundary scan. It initializes the
@@ -282,8 +284,8 @@ output buffers, and explicit in-place recurrent state updates. In the measured
 B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at all 33 sampled lengths through T=32768. Chunk backward remains faster for
 all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
-narrowest forward and backward margins are 1.07x at B1/T8192 and
-1.08x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
+narrowest forward and backward margins are 1.15x at B1/T8192 and
+1.09x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
 because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
 byte-address range. Token forward is measured with the same fixed H16 and
 B1/B2/B4 batch matrix and remains faster at all 24 points through T=128. The
