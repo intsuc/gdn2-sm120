@@ -199,34 +199,6 @@ uv run --group visualization gdn2-sm120-plot \
 `--output` names the light/fallback figure; the plotter also writes the sibling
 `docs/assets/benchmark-results-sm120-dark.png`.
 
-Representative BF16 medians on the target workstation are:
-
-| Path | Shape | CuTe SM120 | Official Triton | Speedup |
-|---|---:|---:|---:|---:|
-| chunk forward | B1 T16 H16 | 22.1 us | 183.6 us | **8.32x** |
-| chunk forward | B1 T512 H16 | 59.9 us | 184.8 us | **3.09x** |
-| chunk forward | B1 T2048 H16 | 160.0 us | 235.7 us | **1.47x** |
-| chunk forward | B1 T16384 H16 | 1762.2 us | 2116.6 us | **1.20x** |
-| chunk forward | B1 T32768 H16 | 3476.3 us | 4236.1 us | **1.22x** |
-| chunk forward | B2 T32768 H16 | 5697.5 us | 7960.4 us | **1.40x** |
-| chunk forward | B4 T32768 H16 | 10542.5 us | 15673.2 us | **1.49x** |
-| chunk backward | B1 T16 H16 | 113.9 us | 278.0 us | **2.44x** |
-| chunk backward | B1 T64 H16 | 122.1 us | 279.2 us | **2.29x** |
-| chunk backward | B1 T512 H16 | 134.6 us | 281.6 us | **2.09x** |
-| chunk backward | B1 T2048 H16 | 556.0 us | 707.6 us | **1.27x** |
-| chunk backward | B1 T16384 H16 | 5251.6 us | 6346.0 us | **1.21x** |
-| chunk backward | B1 T32768 H16 | 10649.0 us | 12638.2 us | **1.19x** |
-| chunk backward | B2 T8192 H16 | 5043.1 us | 5746.1 us | **1.14x** |
-| chunk backward | B2 T32768 H16 | 20441.3 us | 23034.4 us | **1.13x** |
-| chunk backward | B4 T256 H16 | 234.4 us | 391.3 us | **1.67x** |
-| chunk backward | B4 T16384 H16 | 19658.2 us | 22164.8 us | **1.13x** |
-| token forward | B1 T1 H16 | 13.1 us | 25.0 us | **1.91x** |
-| token forward | B1 T128 H16 | 53.7 us | 120.4 us | **2.24x** |
-| token forward | B2 T1 H16 | 13.1 us | 24.6 us | **1.88x** |
-| token forward | B2 T128 H16 | 61.8 us | 121.2 us | **1.96x** |
-| token forward | B4 T1 H16 | 14.8 us | 24.7 us | **1.67x** |
-| token forward | B4 T128 H16 | 90.3 us | 132.6 us | **1.47x** |
-
 ## Why FROST is not copied directly
 
 The cuDNN Frontend FROST GDN2 kernel is an important scheduling reference, but
