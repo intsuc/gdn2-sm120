@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -218,6 +219,51 @@ def test_renders_headless_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert chunk_scales == {"Chunk forward": "log", "Chunk backward": "log"}
 
 
+def test_main_panels_are_stacked_vertically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = tmp_path / "suite.json"
+    destination = tmp_path / "plot.png"
+    _three_mode_suite(source)
+    suite = load_benchmarks([source])
+    real_subplots = plt.subplots
+    captured: dict[str, object] = {}
+
+    def capture_subplots(*args: object, **kwargs: object) -> tuple[object, object]:
+        figure, axes = real_subplots(*args, **kwargs)
+        captured.update(args=args, kwargs=kwargs, figure=figure, axes=axes)
+        return figure, axes
+
+    monkeypatch.setattr(plt, "subplots", capture_subplots)
+
+    plot_benchmarks._render_benchmark_figure(
+        plt,
+        suite,
+        destination,
+        title=None,
+        palette=plot_benchmarks._plot_palette("light"),
+    )
+
+    assert captured["args"] == (3, 1)
+    axes = list(captured["axes"])
+    assert len(axes) == 3
+    assert [axis.get_title(loc="left") for axis in axes] == [
+        "Chunk forward",
+        "Chunk backward",
+        "Token forward",
+    ]
+    positions = [axis.get_position() for axis in axes]
+    assert [position.x0 for position in positions] == pytest.approx([positions[0].x0] * 3)
+    assert [position.width for position in positions] == pytest.approx([positions[0].width] * 3)
+    assert positions[0].y0 > positions[1].y1
+    assert positions[1].y0 > positions[2].y1
+    plt.close(captured["figure"])
+
+
 def test_renders_light_and_dark_pngs(tmp_path: Path) -> None:
     pytest.importorskip("matplotlib")
     from matplotlib import image as matplotlib_image
@@ -409,73 +455,209 @@ def test_chunk_values_render_in_a_rail_above_the_data(tmp_path: Path, theme: str
 
 
 @pytest.mark.parametrize("theme", ("light", "dark"))
-def test_mixed_batch_chunk_sweeps_use_independent_lines_union_ticks_and_speedup_rows(
+@pytest.mark.parametrize("mode", ("chunk-forward", "chunk-backward"))
+def test_mixed_batch_chunk_sweeps_use_dodged_dumbbells_trends_and_speedup_rows(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     theme: str,
+    mode: str,
 ) -> None:
     pytest.importorskip("matplotlib")
     from matplotlib import pyplot as plt
 
     source = tmp_path / "mixed-batch-chunks.json"
-    records = _mixed_batch_chunk_records()
+    records = _mixed_batch_chunk_records(mode)
+    records.append(_record(mode, 16, batch=4, cute_us=130.0, triton_us=143.0))
     _write_suite(source, records)
     points = list(load_benchmarks([source]).points)
     palette = plot_benchmarks._plot_palette(theme)
     figure, axis = plt.subplots()
-    connectors: list[object] = []
-    crossovers: list[object] = []
-    monkeypatch.setattr(axis, "vlines", lambda *args, **kwargs: connectors.append((args, kwargs)))
-    monkeypatch.setattr(axis, "axvspan", lambda *args, **kwargs: crossovers.append((args, kwargs)))
+    try:
+        plot_benchmarks._plot_chunk_panel(
+            axis,
+            points,
+            plot_benchmarks.MODE_TITLES[mode],
+            log_latency=True,
+            palette=palette,
+        )
+        figure.canvas.draw()
+
+        groups = {(point.batch, point.heads) for point in points}
+        trends = [line for line in axis.lines if line.get_gid() == "chunk-trend"]
+        connectors = [line for line in axis.lines if line.get_gid() == "chunk-pair-connector"]
+        cute_collections = [
+            collection
+            for collection in axis.collections
+            if collection.get_gid() == "chunk-observation-cute"
+        ]
+        triton_collections = [
+            collection
+            for collection in axis.collections
+            if collection.get_gid() == "chunk-observation-triton"
+        ]
+
+        assert axis.get_gid() == "chunk-multi-shape-panel"
+        assert len(trends) == 2 * len(groups)
+        assert Counter(line.get_color() for line in trends) == Counter(
+            {palette.cute: len(groups), palette.triton: len(groups)}
+        )
+        expected_trend_values = Counter(
+            tuple(
+                getattr(point, implementation)
+                for point in sorted(
+                    (candidate for candidate in points if candidate.batch == batch),
+                    key=lambda point: point.time,
+                )
+            )
+            for batch in (1, 2, 4)
+            for implementation in ("cute_median_us", "triton_median_us")
+        )
+        assert Counter(tuple(line.get_ydata()) for line in trends) == expected_trend_values
+
+        assert len(connectors) == len(points)
+        assert len(cute_collections) == len(groups)
+        assert len(triton_collections) == len(groups)
+        cute_offsets = [
+            (float(x), float(y))
+            for collection in cute_collections
+            for x, y in collection.get_offsets()
+        ]
+        triton_offsets = [
+            (float(x), float(y))
+            for collection in triton_collections
+            for x, y in collection.get_offsets()
+        ]
+        assert len(cute_offsets) == len(points)
+        assert len(triton_offsets) == len(points)
+        assert Counter(round(y, 8) for _, y in cute_offsets) == Counter(
+            round(point.cute_median_us, 8) for point in points
+        )
+        assert Counter(round(y, 8) for _, y in triton_offsets) == Counter(
+            round(point.triton_median_us, 8) for point in points
+        )
+
+        true_xs = [math.log2(point.time) for point in points]
+        connector_midpoints_by_tick: dict[float, list[float]] = {}
+        for connector in connectors:
+            connector_xs = [float(x) for x in connector.get_xdata()]
+            connector_ys = [float(y) for y in connector.get_ydata()]
+            assert len(connector_xs) == len(connector_ys) == 2
+            assert connector_xs[0] < connector_xs[1]
+            midpoint = sum(connector_xs) / 2.0
+            tick = min(true_xs, key=lambda true_x: abs(midpoint - true_x))
+            assert abs(midpoint - tick) <= 0.21
+            assert all(abs(x - tick) <= 0.26 for x in connector_xs)
+            connector_midpoints_by_tick.setdefault(tick, []).append(midpoint)
+            assert any(
+                x == pytest.approx(connector_xs[0]) and y == pytest.approx(connector_ys[0])
+                for x, y in cute_offsets
+            )
+            assert any(
+                x == pytest.approx(connector_xs[1]) and y == pytest.approx(connector_ys[1])
+                for x, y in triton_offsets
+            )
+        for midpoints in connector_midpoints_by_tick.values():
+            assert len({round(midpoint, 8) for midpoint in midpoints}) == len(midpoints)
+
+        assert list(axis.get_xticks()) == pytest.approx([4.0, 6.0, 7.0, 8.0])
+        assert [tick.get_text() for tick in axis.get_xticklabels()] == ["16", "64", "128", "256"]
+        assert axis.get_xlabel().startswith("Sequence length T (log₂ spacing) · fixed H16")
+        assert "dodged left→right" in axis.get_xlabel()
+
+        keys = [text for text in axis.texts if text.get_gid() == "chunk-rail-key"]
+        assert [text.get_text() for text in keys] == ["B1", "B2", "B4"]
+        renderer = figure.canvas.get_renderer()
+        y_label_bounds = axis.yaxis.label.get_window_extent(renderer)
+        assert all(not y_label_bounds.overlaps(key.get_window_extent(renderer)) for key in keys)
+
+        labels = [text for text in axis.texts if text.get_gid() == "chunk-rail-label"]
+        assert Counter(text.get_text() for text in labels) == Counter(
+            plot_benchmarks._speedup_label(point.speedup, palette)[0] for point in points
+        )
+        assert len(labels) == len(points)
+        assert Counter(round(text.get_position()[0], 8) for text in labels) == Counter(
+            round(math.log2(point.time), 8) for point in points
+        )
+        assert all(text.get_text().endswith("×") for text in labels)
+        assert len([patch for patch in axis.patches if patch.get_gid() == "chunk-value-rail"]) == 1
+    finally:
+        plt.close(figure)
+
+
+def test_chunk_dodge_separates_groups_with_the_same_batch_and_different_heads(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = tmp_path / "same-batch-different-heads.json"
+    records = [
+        _record(
+            "chunk-forward",
+            time,
+            batch=1,
+            heads=heads,
+            cute_us=40.0 + time,
+            triton_us=80.0 + time,
+        )
+        for heads in (16, 32)
+        for time in (16, 64)
+    ]
+    _write_suite(source, records)
+    points = list(load_benchmarks([source]).points)
+    figure, axis = plt.subplots()
     try:
         plot_benchmarks._plot_chunk_panel(
             axis,
             points,
             "Chunk forward",
             log_latency=True,
-            palette=palette,
         )
         figure.canvas.draw()
 
-        series = [line for line in axis.lines if line.get_gid() == "chunk-series"]
-        assert len(series) == 6
-        assert [line.get_color() for line in series] == [
-            palette.cute,
-            palette.triton,
-        ] * 3
-        assert [line.get_marker() for line in series] == ["o", "s"] * 3
-        assert [line.get_linestyle() for line in series] == ["-", "-", "--", "--", ":", ":"]
-        assert [list(line.get_xdata()) for line in series] == [
-            [4.0, 6.0],
-            [4.0, 6.0],
-            [4.0, 7.0],
-            [4.0, 7.0],
-            [6.0, 8.0],
-            [6.0, 8.0],
-        ]
-        assert [line.get_label() for line in series] == [
-            "CuTe SM120",
-            "Official Triton",
-            "_nolegend_",
-            "_nolegend_",
-            "_nolegend_",
-            "_nolegend_",
-        ]
-        assert connectors == []
-        assert crossovers == []
-
-        assert list(axis.get_xticks()) == pytest.approx([4.0, 6.0, 7.0, 8.0])
-        assert [tick.get_text() for tick in axis.get_xticklabels()] == ["16", "64", "128", "256"]
-        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · fixed H16"
-
-        keys = [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-key"]
-        assert keys == ["B1", "B2", "B4"]
-        labels = [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-label"]
-        assert Counter(labels) == Counter(
-            plot_benchmarks._speedup_label(point.speedup, palette)[0] for point in points
+        connectors = [line for line in axis.lines if line.get_gid() == "chunk-pair-connector"]
+        assert len(connectors) == len(points)
+        midpoints_by_time: dict[int, list[float]] = {16: [], 64: []}
+        for connector in connectors:
+            midpoint = sum(float(x) for x in connector.get_xdata()) / 2.0
+            time = min(midpoints_by_time, key=lambda value: abs(midpoint - math.log2(value)))
+            assert abs(midpoint - math.log2(time)) <= 0.21
+            midpoints_by_time[time].append(midpoint)
+        assert all(
+            len(midpoints) == len({round(midpoint, 8) for midpoint in midpoints}) == 2
+            for midpoints in midpoints_by_time.values()
         )
-        assert len(labels) == len(points)
-        assert all(label.endswith("×") for label in labels)
-        assert len([patch for patch in axis.patches if patch.get_gid() == "chunk-value-rail"]) == 1
+
+        assert [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-key"] == [
+            "B1/H16",
+            "B1/H32",
+        ]
+        assert (
+            len(
+                [
+                    collection
+                    for collection in axis.collections
+                    if collection.get_gid()
+                    in {"chunk-observation-cute", "chunk-observation-triton"}
+                ]
+            )
+            == 4
+        )
     finally:
         plt.close(figure)
+
+
+def test_chunk_dodge_adapts_to_close_ticks_and_many_groups() -> None:
+    shapes = [(batch, 16) for batch in range(1, 7)]
+    times = [16, 17]
+
+    centers, implementation_dodge = plot_benchmarks._chunk_dodge_geometry(shapes, times)
+
+    ordered_centers = [centers[shape] for shape in shapes]
+    center_steps = [
+        right - left for left, right in zip(ordered_centers, ordered_centers[1:], strict=False)
+    ]
+    tick_gap = math.log2(times[1]) - math.log2(times[0])
+    assert ordered_centers == sorted(ordered_centers)
+    maximum_offset = max(abs(center) + implementation_dodge for center in ordered_centers)
+    assert maximum_offset <= plot_benchmarks._CHUNK_TICK_GAP_FRACTION * tick_gap + 1e-12
+    assert 2.0 * implementation_dodge < min(center_steps)

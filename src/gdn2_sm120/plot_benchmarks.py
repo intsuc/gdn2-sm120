@@ -24,6 +24,10 @@ _CHUNK_SPEEDUP_ROW_Y = 0.945
 _TOKEN_DATA_TOP_FRACTION = 0.82
 _TOKEN_SPEEDUP_ROW_Y = 0.94
 _BATCH_LINESTYLES = ("-", "--", ":", "-.")
+_CHUNK_GROUP_DODGE_MAX = 0.20
+_CHUNK_IMPLEMENTATION_DODGE_MAX = 0.045
+_CHUNK_IMPLEMENTATION_LANE_FRACTION = 0.35
+_CHUNK_TICK_GAP_FRACTION = 0.40
 
 
 @dataclass(frozen=True)
@@ -508,6 +512,30 @@ def _plot_chunk_panel(
         )
 
 
+def _chunk_dodge_geometry(
+    shapes: list[tuple[int, int]],
+    times: list[int],
+) -> tuple[dict[tuple[int, int], float], float]:
+    """Return ordered group centers and the nested implementation offset."""
+
+    log_times = [math.log2(time) for time in times]
+    gaps = [right - left for left, right in zip(log_times, log_times[1:], strict=False)]
+    maximum_half_width = _CHUNK_GROUP_DODGE_MAX + _CHUNK_IMPLEMENTATION_DODGE_MAX
+    scale = min(1.0, _CHUNK_TICK_GAP_FRACTION * min(gaps) / maximum_half_width) if gaps else 1.0
+    group_spread = _CHUNK_GROUP_DODGE_MAX * scale
+    implementation_dodge = _CHUNK_IMPLEMENTATION_DODGE_MAX * scale
+    if len(shapes) == 1:
+        return {shapes[0]: 0.0}, implementation_dodge
+
+    center_step = 2.0 * group_spread / (len(shapes) - 1)
+    implementation_dodge = min(
+        implementation_dodge,
+        _CHUNK_IMPLEMENTATION_LANE_FRACTION * center_step,
+    )
+    centers = {shape: -group_spread + index * center_step for index, shape in enumerate(shapes)}
+    return centers, implementation_dodge
+
+
 def _plot_multi_shape_chunk_panel(
     axis: Any,
     points: list[BenchmarkPoint],
@@ -516,7 +544,7 @@ def _plot_multi_shape_chunk_panel(
     log_latency: bool,
     palette: PlotPalette,
 ) -> None:
-    """Draw independent fixed-B/H chunk sweeps on shared sequence-length ticks."""
+    """Draw batch-dodged CuTe/Triton dumbbells around shared length ticks."""
 
     from matplotlib.patches import Rectangle
 
@@ -527,55 +555,99 @@ def _plot_multi_shape_chunk_panel(
         (shape, sorted(shape_points, key=lambda point: point.time))
         for shape, shape_points in sorted(grouped.items())
     ]
-    batches = sorted({batch for (batch, _), _ in groups})
+    shapes = [shape for shape, _ in groups]
+    batches = sorted({batch for batch, _ in shapes})
     linestyle_by_batch = {
         batch: _BATCH_LINESTYLES[index % len(_BATCH_LINESTYLES)]
         for index, batch in enumerate(batches)
     }
     times = sorted({point.time for point in points})
+    center_by_shape, implementation_dodge = _chunk_dodge_geometry(shapes, times)
     xs = [math.log2(time) for time in times]
     cute = [point.cute_median_us for point in points]
     triton = [point.triton_median_us for point in points]
     maximum = max((*cute, *triton))
     minimum = min((*cute, *triton))
 
-    for index, ((batch, _), shape_points) in enumerate(groups):
-        shape_xs = [math.log2(point.time) for point in shape_points]
+    for index, (shape, shape_points) in enumerate(groups):
+        batch, _ = shape
+        center_xs = [math.log2(point.time) + center_by_shape[shape] for point in shape_points]
+        cute_xs = [x - implementation_dodge for x in center_xs]
+        triton_xs = [x + implementation_dodge for x in center_xs]
         linestyle = linestyle_by_batch[batch]
         axis.plot(
-            shape_xs,
+            cute_xs,
             [point.cute_median_us for point in shape_points],
             color=palette.cute,
-            marker="o",
             linestyle=linestyle,
-            linewidth=2.4,
+            linewidth=1.45,
+            alpha=0.38,
             label="CuTe SM120" if index == 0 else "_nolegend_",
-            zorder=3,
-            gid="chunk-series",
+            zorder=2,
+            gid="chunk-trend",
         )
         axis.plot(
-            shape_xs,
+            triton_xs,
             [point.triton_median_us for point in shape_points],
             color=palette.triton,
-            marker="s",
             linestyle=linestyle,
-            linewidth=2.2,
+            linewidth=1.45,
+            alpha=0.38,
             label="Official Triton" if index == 0 else "_nolegend_",
-            zorder=3,
-            gid="chunk-series",
+            zorder=2,
+            gid="chunk-trend",
+        )
+        for cute_x, triton_x, point in zip(cute_xs, triton_xs, shape_points, strict=True):
+            axis.plot(
+                [cute_x, triton_x],
+                [point.cute_median_us, point.triton_median_us],
+                color=palette.tick,
+                linewidth=1.8,
+                alpha=0.78,
+                solid_capstyle="round",
+                zorder=3,
+                gid="chunk-pair-connector",
+            )
+        axis.scatter(
+            cute_xs,
+            [point.cute_median_us for point in shape_points],
+            s=54,
+            marker="o",
+            facecolor=palette.cute,
+            edgecolor=palette.background,
+            linewidth=1.45,
+            zorder=4,
+            gid="chunk-observation-cute",
+        )
+        axis.scatter(
+            triton_xs,
+            [point.triton_median_us for point in shape_points],
+            s=52,
+            marker="s",
+            facecolor=palette.triton,
+            edgecolor=palette.background,
+            linewidth=1.45,
+            zorder=4,
+            gid="chunk-observation-triton",
         )
 
     axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
     axis.set_xticks(
         xs,
         [str(time) for time in times],
-        rotation=35 if len(times) > 6 else 0,
-        ha="right" if len(times) > 6 else "center",
-        rotation_mode="anchor",
+        rotation=0,
+        ha="center",
     )
-    heads = {heads for (_, heads), _ in groups}
-    shape_suffix = f"fixed H{next(iter(heads))}" if len(heads) == 1 else "grouped by B/H"
-    axis.set_xlabel(f"Sequence length T (log₂ spacing) · {shape_suffix}")
+    head_counts = {heads for (_, heads), _ in groups}
+    shape_suffix = (
+        f"fixed H{next(iter(head_counts))}" if len(head_counts) == 1 else "grouped by B/H"
+    )
+    group_order = " / ".join(
+        f"B{batch}" if len(head_counts) == 1 else f"B{batch}/H{heads}" for batch, heads in shapes
+    )
+    axis.set_xlabel(
+        f"Sequence length T (log₂ spacing) · {shape_suffix} · {group_order} dodged left→right"
+    )
 
     if log_latency:
         axis.set_yscale("log", base=2)
@@ -593,7 +665,10 @@ def _plot_multi_shape_chunk_panel(
         axis.set_ylabel("Median latency (µs / call)")
         axis.set_ylim(0.0, maximum / _CHUNK_DATA_TOP_FRACTION)
         axis.grid(axis="y", color=palette.grid, linewidth=0.8)
+    axis.yaxis.set_label_coords(-0.04, _CHUNK_RAIL_BOTTOM / 2.0)
+    axis.grid(axis="x", color=palette.grid, linewidth=0.6, alpha=0.55)
     axis.set_axisbelow(True)
+    axis.set_gid("chunk-multi-shape-panel")
 
     axis.add_patch(
         Rectangle(
@@ -623,12 +698,12 @@ def _plot_multi_shape_chunk_panel(
         )
 
     rail_transform = axis.get_xaxis_transform()
-    label_fontsize = 6.2 if len(times) >= 11 else 7.8
-    fixed_heads = len(heads) == 1
+    label_fontsize = 7.5 if len(times) >= 11 else 7.8
+    fixed_heads = len(head_counts) == 1
     for ((batch, heads_for_group), shape_points), y in zip(groups, row_ys, strict=True):
         key = f"B{batch}" if fixed_heads else f"B{batch}/H{heads_for_group}"
         axis.plot(
-            [-0.055, -0.025],
+            [-0.008, 0.004],
             [y, y],
             transform=axis.transAxes,
             color=palette.foreground,
@@ -639,14 +714,14 @@ def _plot_multi_shape_chunk_panel(
             gid="chunk-rail-key-line",
         )
         axis.text(
-            -0.065,
+            -0.012,
             y,
             key,
             transform=axis.transAxes,
             ha="right",
             va="center",
             color=palette.foreground,
-            fontsize=7.2,
+            fontsize=7.5,
             fontweight="bold",
             zorder=7,
             clip_on=False,
@@ -834,13 +909,11 @@ def _render_benchmark_figure(
     if missing:
         raise ValueError(f"plot requires all three modes; missing: {', '.join(missing)}")
 
-    token_shapes = {(point.batch, point.heads) for point in by_mode["token-forward"]}
-    token_width = 1.10 if len(token_shapes) == 1 else 0.80
     figure, axes = plt.subplots(
-        1,
         3,
-        figsize=(16.5, 5.9),
-        gridspec_kw={"width_ratios": (1.25, 1.25, token_width), "wspace": 0.30},
+        1,
+        figsize=(16.5, 15.2),
+        gridspec_kw={"height_ratios": (1.0, 1.0, 0.76), "hspace": 0.47},
     )
     _plot_chunk_panel(
         axes[0],
@@ -861,16 +934,16 @@ def _render_benchmark_figure(
     display_device = suite.device.removeprefix("NVIDIA ")
     figure.suptitle(
         title or f"Gated DeltaNet-2 latency on {display_device}",
-        x=0.04,
-        y=0.98,
+        x=0.065,
+        y=0.982,
         ha="left",
         fontsize=17,
         fontweight="bold",
     )
     normalized = "Q/K L2-normalized" if suite.qk_l2_normalized else "Q/K not normalized"
     figure.text(
-        0.04,
-        0.925,
+        0.065,
+        0.951,
         f"{suite.dtype.upper()} · K=V=128 · scale={suite.scale:g} · {normalized} · "
         "lower is better · "
         "labels are official/CuTe speedup",
@@ -878,26 +951,51 @@ def _render_benchmark_figure(
         fontsize=10,
         color=palette.tick,
     )
-    handles, labels = axes[0].get_legend_handles_labels()
+
+    from matplotlib.lines import Line2D
+
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            color=palette.cute,
+            marker="o",
+            markerfacecolor=palette.cute,
+            markeredgecolor=palette.background,
+            markeredgewidth=1.2,
+            linestyle="none",
+            label="CuTe SM120",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=palette.triton,
+            marker="s",
+            markerfacecolor=palette.triton,
+            markeredgecolor=palette.background,
+            markeredgewidth=1.2,
+            linestyle="none",
+            label="Official Triton",
+        ),
+    ]
     figure.legend(
-        handles,
-        labels,
+        handles=handles,
         loc="upper right",
-        bbox_to_anchor=(0.98, 0.985),
+        bbox_to_anchor=(0.955, 0.986),
         frameon=False,
         ncol=2,
         fontsize=10,
     )
     figure.text(
-        0.04,
-        0.02,
+        0.065,
+        0.025,
         f"Synchronized CUDA events · PyTorch {suite.torch_version} / CUDA {suite.cuda_runtime} · "
         f"official commit {suite.official_commit[:12]}",
         ha="left",
         fontsize=8.5,
         color=palette.muted,
     )
-    figure.subplots_adjust(left=0.055, right=0.985, top=0.84, bottom=0.21)
+    figure.subplots_adjust(left=0.095, right=0.975, top=0.92, bottom=0.075)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         figure.savefig(
