@@ -53,8 +53,8 @@ The chunk forward uses a BT=16 compact-WY decomposition:
    scalar scan consumes that state and handles only the final tail. Sequences
    shorter than one full chunk remain entirely on the scalar path.
 
-For BF16 calls with at least 32 full chunks, including partial-tail lengths,
-the output identity
+For forward-only BF16 calls with at least three full chunks, including
+partial-tail lengths, the output identity
 
 ```text
 R = U - Y S
@@ -63,16 +63,17 @@ O = Q_gamma S + A_qk R
 ```
 
 moves the two `A_qk` products into the independent chunk-preparation CTAs and
-removes `A_qk @ R` from the sequential state scan. That scan pipelines the next
-Y/Q tile and the current K-tail tile through 128-bit `cp.async`, reusing shared
-state staging after its register load. FP16 retains the original expression to
-avoid overflow in an intermediate that would cancel algebraically. Long BF16
-training uses the rearranged expression too, but writes Q-effective to a
-temporary compact scratch consumed only by the state scan. It independently
-preserves raw Q-gamma and A-qk checkpoint bits for backward instead of
-overwriting their public auxiliary buffers. A forward-only partial-tail call
-also keeps the final chunk's raw Q-gamma and A-qk because its scalar tail scan
-uses the original expression.
+removes `A_qk @ R` from the sequential state scan. The V8 form is profitable
+from the public selector's first complete three-chunk shape; the independent
+V16 crossover remains at 32 chunks. The scan pipelines the next Y/Q tile and
+the current K-tail tile through 128-bit `cp.async`, reusing shared state staging
+after its register load. FP16 retains the original expression to avoid overflow
+in an intermediate that would cancel algebraically. BF16 training keeps its
+measured 32-chunk crossover: the rearranged expression requires a temporary
+compact Q-effective scratch consumed only by the state scan, while raw Q-gamma
+and A-qk checkpoint bits must remain available to backward. A forward-only
+partial-tail call also keeps the final chunk's raw Q-gamma and A-qk because its
+scalar tail scan uses the original expression.
 
 The BF16 specialization is validated for normalized Q/K and bounded model
 activations. Values near the BF16 format limit are outside its numerical

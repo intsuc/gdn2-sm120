@@ -64,9 +64,9 @@ CuTe-versus-official comparison.
 | Path | B | T | H | Warmup / samples | CuTe median | Official median | Speedup | max diff |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | chunk forward | 1 | 16 | 16 | 40 / 300 | 22.1 | 183.6 | **8.32x** | 1.55e-3 |
-| chunk forward | 1 | 64 | 16 | 40 / 300 | 39.4 | 181.0 | **4.60x** | 1.36e-3 |
-| chunk forward | 1 | 128 | 16 | 40 / 300 | 45.6 | 182.0 | **3.99x** | 1.60e-3 |
-| chunk forward | 1 | 256 | 16 | 40 / 300 | 63.0 | 183.5 | **2.91x** | 1.39e-3 |
+| chunk forward | 1 | 64 | 16 | 40 / 300 | 35.3 | 182.0 | **5.16x** | 1.36e-3 |
+| chunk forward | 1 | 128 | 16 | 40 / 300 | 39.4 | 183.4 | **4.65x** | 1.60e-3 |
+| chunk forward | 1 | 256 | 16 | 40 / 300 | 51.7 | 182.0 | **3.52x** | 1.39e-3 |
 | chunk forward | 1 | 512 | 16 | 40 / 300 | 59.9 | 184.8 | **3.09x** | 1.43e-3 |
 | chunk forward | 1 | 1024 | 16 | 40 / 300 | 94.7 | 182.5 | **1.93x** | 1.37e-3 |
 | chunk forward | 1 | 2048 | 16 | 40 / 300 | 160.0 | 235.7 | **1.47x** | 1.40e-3 |
@@ -75,9 +75,9 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 16384 | 16 | 10 / 50 | 1762.2 | 2116.6 | **1.20x** | 1.50e-3 |
 | chunk forward | 1 | 32768 | 16 | 10 / 50 | 3476.3 | 4236.1 | **1.22x** | 1.82e-3 |
 | chunk forward | 2 | 16 | 16 | 40 / 300 | 24.1 | 181.2 | **7.52x** | 1.55e-3 |
-| chunk forward | 2 | 64 | 16 | 40 / 300 | 41.4 | 183.1 | **4.42x** | 1.36e-3 |
-| chunk forward | 2 | 128 | 16 | 40 / 300 | 53.7 | 181.3 | **3.37x** | 1.62e-3 |
-| chunk forward | 2 | 256 | 16 | 40 / 300 | 76.2 | 182.8 | **2.40x** | 1.40e-3 |
+| chunk forward | 2 | 64 | 16 | 40 / 300 | 39.4 | 184.0 | **4.67x** | 1.36e-3 |
+| chunk forward | 2 | 128 | 16 | 40 / 300 | 47.6 | 182.2 | **3.83x** | 1.62e-3 |
+| chunk forward | 2 | 256 | 16 | 40 / 300 | 62.1 | 182.1 | **2.93x** | 1.40e-3 |
 | chunk forward | 2 | 512 | 16 | 40 / 300 | 90.6 | 183.2 | **2.02x** | 1.51e-3 |
 | chunk forward | 2 | 1024 | 16 | 40 / 300 | 149.9 | 221.5 | **1.48x** | 1.35e-3 |
 | chunk forward | 2 | 2048 | 16 | 40 / 300 | 338.0 | 434.3 | **1.29x** | 1.47e-3 |
@@ -86,9 +86,9 @@ CuTe-versus-official comparison.
 | chunk forward | 2 | 16384 | 16 | 10 / 50 | 2793.1 | 3964.6 | **1.42x** | 2.11e-3 |
 | chunk forward | 2 | 32768 | 16 | 10 / 50 | 5697.5 | 7960.4 | **1.40x** | 1.51e-3 |
 | chunk forward | 4 | 16 | 16 | 40 / 300 | 26.1 | 183.5 | **7.02x** | 1.55e-3 |
-| chunk forward | 4 | 64 | 16 | 40 / 300 | 55.8 | 181.0 | **3.24x** | 1.57e-3 |
-| chunk forward | 4 | 128 | 16 | 40 / 300 | 80.4 | 181.1 | **2.25x** | 1.62e-3 |
-| chunk forward | 4 | 256 | 16 | 40 / 300 | 129.5 | 185.6 | **1.43x** | 1.68e-3 |
+| chunk forward | 4 | 64 | 16 | 40 / 300 | 49.6 | 182.7 | **3.69x** | 1.57e-3 |
+| chunk forward | 4 | 128 | 16 | 40 / 300 | 65.8 | 181.4 | **2.76x** | 1.62e-3 |
+| chunk forward | 4 | 256 | 16 | 40 / 300 | 102.9 | 182.9 | **1.78x** | 1.68e-3 |
 | chunk forward | 4 | 512 | 16 | 40 / 300 | 133.5 | 220.3 | **1.65x** | 1.56e-3 |
 | chunk forward | 4 | 1024 | 16 | 40 / 300 | 326.7 | 415.9 | **1.27x** | 1.60e-3 |
 | chunk forward | 4 | 2048 | 16 | 40 / 300 | 708.7 | 927.7 | **1.31x** | 1.64e-3 |
@@ -134,24 +134,24 @@ CuTe-versus-official comparison.
 | token forward | 1 | 8 | 16 | 25 / 100 | 16.9 | 29.1 | **1.72x** | 6.71e-8 |
 | token forward | 1 | 16 | 16 | 25 / 100 | 21.0 | 35.1 | **1.67x** | 1.91e-6 |
 | token forward | 1 | 32 | 16 | 25 / 100 | 27.2 | 46.7 | **1.72x** | 1.53e-5 |
-| token forward | 1 | 64 | 16 | 25 / 100 | 46.6 | 71.2 | **1.53x** | 1.26e-3 |
-| token forward | 1 | 128 | 16 | 25 / 100 | 53.7 | 120.4 | **2.24x** | 8.52e-4 |
+| token forward | 1 | 64 | 16 | 25 / 100 | 43.5 | 71.2 | **1.64x** | 1.26e-3 |
+| token forward | 1 | 128 | 16 | 25 / 100 | 46.6 | 120.3 | **2.58x** | 8.52e-4 |
 | token forward | 2 | 1 | 16 | 25 / 100 | 13.1 | 24.6 | **1.88x** | 2.98e-8 |
 | token forward | 2 | 2 | 16 | 25 / 100 | 14.8 | 24.6 | **1.66x** | 2.98e-8 |
 | token forward | 2 | 4 | 16 | 25 / 100 | 14.9 | 26.7 | **1.79x** | 1.91e-6 |
 | token forward | 2 | 8 | 16 | 25 / 100 | 17.0 | 29.2 | **1.71x** | 9.54e-7 |
 | token forward | 2 | 16 | 16 | 25 / 100 | 23.1 | 35.3 | **1.53x** | 1.91e-6 |
 | token forward | 2 | 32 | 16 | 25 / 100 | 31.3 | 47.5 | **1.52x** | 3.05e-5 |
-| token forward | 2 | 64 | 16 | 25 / 100 | 48.6 | 72.2 | **1.48x** | 1.26e-3 |
-| token forward | 2 | 128 | 16 | 25 / 100 | 61.8 | 121.2 | **1.96x** | 9.96e-4 |
+| token forward | 2 | 64 | 16 | 25 / 100 | 46.5 | 72.1 | **1.55x** | 1.26e-3 |
+| token forward | 2 | 128 | 16 | 25 / 100 | 55.6 | 121.1 | **2.18x** | 9.96e-4 |
 | token forward | 4 | 1 | 16 | 25 / 100 | 14.8 | 24.7 | **1.67x** | 2.98e-8 |
 | token forward | 4 | 2 | 16 | 25 / 100 | 14.9 | 24.7 | **1.65x** | 1.19e-7 |
 | token forward | 4 | 4 | 16 | 25 / 100 | 16.9 | 27.9 | **1.65x** | 1.91e-6 |
 | token forward | 4 | 8 | 16 | 25 / 100 | 19.1 | 30.2 | **1.59x** | 3.05e-5 |
 | token forward | 4 | 16 | 16 | 25 / 100 | 25.1 | 38.1 | **1.52x** | 3.05e-5 |
 | token forward | 4 | 32 | 16 | 25 / 100 | 35.3 | 50.7 | **1.44x** | 6.10e-5 |
-| token forward | 4 | 64 | 16 | 25 / 100 | 63.9 | 77.3 | **1.21x** | 1.26e-3 |
-| token forward | 4 | 128 | 16 | 25 / 100 | 90.3 | 132.6 | **1.47x** | 1.12e-3 |
+| token forward | 4 | 64 | 16 | 25 / 100 | 56.9 | 78.3 | **1.38x** | 1.26e-3 |
+| token forward | 4 | 128 | 16 | 25 / 100 | 72.9 | 133.2 | **1.83x** | 1.12e-3 |
 
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
 longest-sequence speedups are 1.22x, 1.40x, and 1.49x respectively. Backward is
@@ -168,7 +168,7 @@ tensor exceeds CuTe's 4-GiB per-launch byte-address range.
 
 Token forward is ahead at all 24 measured H16 points. Its public-call speedup
 at T=1 is 1.91x, 1.88x, and 1.67x for B1, B2, and B4 respectively; at T=128 it
-is 2.24x, 1.96x, and 1.47x. These rows include the default output and
+is 2.58x, 2.18x, and 1.83x. These rows include the default output and
 final-state allocations on both public paths.
 
 For full-chunk BF16 training at T>=128, forward checkpoints Y, raw Q-gamma,
@@ -212,6 +212,42 @@ additional points in the canonical publication schema. Unless noted otherwise,
 they use the same workstation, normalized BF16 Q/K, FP32 `g`/state, and
 `scale=0.125` as the canonical suite. Medians and minima are synchronized CUDA
 event microseconds.
+
+### Forward ordered-scan algebra crossover
+
+Nsight Systems isolated the two launches of B1/T256/H16 forward. With the
+original expression, the ordered inter-chunk scan took 29.888 us, or 74.4% of
+the 40.160 us kernel sum; independent chunk preparation took 10.272 us. Moving
+`A_qk @ R` into preparation through
+`O = (Q_gamma - A_qk Y) S + A_qk U` changed preparation only to 10.464 us but
+cut the ordered scan to 17.568 us (-41.2%) and the kernel sum to 28.032 us
+(-30.2%).
+
+The selector now uses this existing algebra schedule for forward-only BF16
+calls from three full chunks onward, while retaining the measured 32-chunk
+crossover for training because preserving raw backward operands requires an
+extra Q-effective scratch. A same-process T48 sweep reduced B1/B2/B4 latency
+by 6.9%, 5.3%, and 7.6%, respectively. FP16 keeps the original expression.
+The refreshed canonical public-call rows are:
+
+| B | T | Previous CuTe | Current CuTe | CuTe change | Official | Speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 64 | 39.360 | 35.296 | **-10.3%** | 182.048 | **5.16x** |
+| 1 | 128 | 45.568 | 39.424 | **-13.5%** | 183.440 | **4.65x** |
+| 1 | 256 | 63.040 | 51.680 | **-18.0%** | 182.016 | **3.52x** |
+| 2 | 64 | 41.440 | 39.392 | **-4.9%** | 184.016 | **4.67x** |
+| 2 | 128 | 53.728 | 47.584 | **-11.4%** | 182.192 | **3.83x** |
+| 2 | 256 | 76.224 | 62.064 | **-18.6%** | 182.096 | **2.93x** |
+| 4 | 64 | 55.808 | 49.568 | **-11.2%** | 182.688 | **3.69x** |
+| 4 | 128 | 80.384 | 65.792 | **-18.2%** | 181.424 | **2.76x** |
+| 4 | 256 | 129.536 | 102.912 | **-20.6%** | 182.880 | **1.78x** |
+
+The before/after publication rows are separate clock-stabilized processes; the
+Nsight capture above isolates the kernel-level cause. Untimed official
+comparisons kept the same maximum differences as the prior rows. Direct
+reference checks across T=48/49/63/64/65/127/128/129 observed at most
+`1.22e-4` output difference between algebra schedules and unchanged final
+states within the existing BF16 numerical contract.
 
 ### T=64 backward boundary and VJP dispatch
 
@@ -330,9 +366,9 @@ below reduce the chain and remove a redundant state product without changing
 that ordered recurrence.
 
 The forward residual checkpoint is now written at T=64 and T>=128, rather than
-only after the T=512 algebra crossover. The extra coalesced store occurs after
-U's last read and removes `Y @ S0` plus one operand from dLower. The same-capture
-GPU kernel sums were:
+only after the T=512 training-algebra crossover. The extra coalesced store
+occurs after U's last read and removes `Y @ S0` plus one operand from dLower.
+The same-capture GPU kernel sums were:
 
 | Path | Legacy U | Saved R | Change |
 |---|---:|---:|---:|

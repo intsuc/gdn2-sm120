@@ -211,14 +211,46 @@ def test_chunk_forward_fp16_normalized_qk_batch_two() -> None:
 
 @pytest.mark.cuda
 @pytest.mark.parametrize(
+    ("time", "dtype", "return_aux", "expected_use_algebra"),
+    [
+        pytest.param(47, torch.bfloat16, False, False, id="inference-before-threshold"),
+        pytest.param(48, torch.bfloat16, False, True, id="inference-at-threshold"),
+        pytest.param(49, torch.bfloat16, False, True, id="inference-partial-tail"),
+        pytest.param(512, torch.float16, False, False, id="fp16-keeps-legacy"),
+        pytest.param(511, torch.bfloat16, True, False, id="training-before-threshold"),
+        pytest.param(512, torch.bfloat16, True, True, id="training-at-threshold"),
+    ],
+)
+def test_chunk_forward_selects_mode_specific_algebra_threshold(
+    time: int,
+    dtype: torch.dtype,
+    return_aux: bool,
+    expected_use_algebra: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    compile_flags = []
+
+    def compile_stub(*args):
+        compile_flags.append((args[-2], args[-1]))
+        return lambda *runtime_args: None
+
+    monkeypatch.setattr(chunk_module, "_compile_chunk_forward", compile_stub)
+    args = _inputs(time, dtype, heads=1)
+    chunk_forward(*args[:6], args[6], scale=0.125, return_aux=return_aux)
+
+    assert compile_flags == [(expected_use_algebra, return_aux)]
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize(
     ("time", "dtype"),
     [
-        pytest.param(496, torch.bfloat16, id="before-algebra-threshold"),
-        pytest.param(512, torch.bfloat16, id="at-algebra-threshold"),
-        pytest.param(1008, torch.bfloat16, id="long-algebra"),
-        pytest.param(1024, torch.bfloat16, id="long-algebra-power-of-two"),
-        pytest.param(1024, torch.float16, id="long-fp16-original-expression"),
-        pytest.param(1025, torch.bfloat16, id="long-partial-tail"),
+        pytest.param(47, torch.bfloat16, id="before-algebra-threshold"),
+        pytest.param(48, torch.bfloat16, id="at-algebra-threshold"),
+        pytest.param(49, torch.bfloat16, id="algebra-partial-tail"),
+        pytest.param(48, torch.float16, id="fp16-original-expression"),
     ],
 )
 def test_chunk_forward_compact_dispatch_boundaries(time: int, dtype: torch.dtype) -> None:
@@ -448,7 +480,7 @@ def test_chunk_forward_fp16_avoids_algebra_overflow() -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
 
-    shape = (1, 1024, 1, 128)
+    shape = (1, 48, 1, 128)
     q = torch.zeros(shape, device="cuda", dtype=torch.float16)
     k = torch.zeros_like(q)
     v = torch.zeros_like(q)

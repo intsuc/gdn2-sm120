@@ -62,9 +62,14 @@ _K_SPLIT_V16_MIN_BATCH_HEADS = 12
 # Reject saved boundary tensors outside the full unsigned address range before
 # launching a kernel; callers must reduce B, T, or H for those training shapes.
 _MAX_CUTE_TENSOR_BYTES = 1 << 32
+# Moving ``A_qk @ R`` out of the ordered state scan pays off as soon as the
+# public forward selector reaches its first full three-chunk shape.  Training
+# retains the longer crossover: preserving raw backward operands needs an
+# extra Q-effective scratch, whose cost is only recovered by a longer scan.
 # The V16 algebra scan reuses its 16x16 shared state tile for K-tail; the V8
-# specialization allocates an explicit K-tail stage of the same shape.
-_ALGEBRA_MIN_CHUNKS = _K_SPLIT_LONG_MIN_CHUNKS
+# specialization used below 32 chunks has an explicit K-tail stage.
+_INFERENCE_ALGEBRA_MIN_CHUNKS = 3
+_TRAINING_ALGEBRA_MIN_CHUNKS = 32
 assert _K_SPLIT_LONG_VALUE_TILE == _CHUNK_SIZE
 
 
@@ -1168,7 +1173,14 @@ def chunk_forward(
             )
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.
-    use_algebra = q.dtype == torch.bfloat16 and time // _CHUNK_SIZE >= _ALGEBRA_MIN_CHUNKS
+    # Forward-only calls have compact operands from the first full chunk and
+    # recover the extra preparation work at three chunks.  Training keeps the
+    # measured 32-chunk crossover because it must also preserve raw Q-gamma
+    # and A-qk for backward in a separate Q-effective scratch.
+    algebra_min_chunks = (
+        _TRAINING_ALGEBRA_MIN_CHUNKS if return_aux else _INFERENCE_ALGEBRA_MIN_CHUNKS
+    )
+    use_algebra = q.dtype == torch.bfloat16 and time // _CHUNK_SIZE >= algebra_min_chunks
     store_forward_aux = return_aux
     aux_dtype = q.dtype if compact_aux or compact_backward_aux else torch.float32
     u_dtype = torch.float32 if compact_backward_aux else aux_dtype

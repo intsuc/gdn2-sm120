@@ -7,8 +7,8 @@ measured on an NVIDIA RTX PRO 6000 Blackwell Workstation Edition.
 The repository contains three working CUDA paths:
 
 - BT=16 compact-WY chunkwise forward with SM120 warp MMA, an occupancy-aware
-  V8/V16 scan, and a specialized algebraic pipeline for long BF16 prefill and
-  training;
+  V8/V16 scan, and a specialized algebraic pipeline used from the first
+  three-chunk BF16 inference shape and for long training sequences;
 - a checkpointed training backward that dispatches between short recurrence,
   chunk-parallel recurrence, and compact-WY warp-MMA VJPs, including a
   CTA-aware T=64 specialization;
@@ -212,13 +212,15 @@ therefore use a schedule designed for SM120 rather than a direct FROST port.
 For long BF16 training, Y, raw Q-gamma, K-tail, A-qk, and the persistent
 E/K-bar MMA operands use BF16, while the value auxiliary, chunk decay, and
 gamma remain FP32.
-When a BF16 sequence contains at least 32 full chunks, including a sequence
-with a partial tail, the forward scan consumes a temporary compact Q-effective
-scratch for the rearranged output identity. Training preserves raw Q-gamma and
-A-qk checkpoint bits for backward. At T=64 and T>=128, each training value-tile
-CTA safely replaces its disjoint U columns after their last use with the FP32
-residual checkpoint `R = U - Y @ S0`; forward-only partial calls retain the
-tail's raw Q-gamma and A-qk for its scalar scan. Backward first precomputes
+Forward-only BF16 calls use the rearranged output identity from three full
+chunks onward, moving the independent A-qk products out of the ordered state
+scan. When training contains at least 32 full chunks, including a sequence
+with a partial tail, that scan consumes a temporary compact Q-effective
+scratch while preserving raw Q-gamma and A-qk checkpoint bits for backward.
+At T=64 and T>=128, each training value-tile CTA safely replaces its disjoint
+U columns after their last use with the FP32 residual checkpoint
+`R = U - Y @ S0`; forward-only partial calls retain the tail's raw Q-gamma and
+A-qk for its scalar scan. Backward first precomputes
 every independent `A_qk.T @ dO` product, then runs a reverse boundary scan
 with 128-bit `cp.async` staging and shuffle-cached decay. The full-chunk BF16
 path emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32;
