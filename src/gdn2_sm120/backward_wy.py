@@ -26,7 +26,6 @@ _MMA_THREADS = 32 * _MMA_WARPS
 _CHAIN_THREADS = _DIM
 _STATE_DOT_KEY_WARPS = 8
 _STATE_DOT_THREADS = 32 * _STATE_DOT_KEY_WARPS
-_FUSED_STATE_DOT_MIN_CHUNK_HEADS = 2048
 _LINEAR_THREADS = 256
 
 _TRIANGLE_NONE = 0
@@ -39,14 +38,14 @@ _COMBINE_NEGATE = 2
 
 
 def _use_fused_state_decay_dot(
-    batch: int,
-    n_chunks: int,
-    heads: int,
+    _batch: int,
+    _n_chunks: int,
+    _heads: int,
     compact_boundaries: bool,
 ) -> bool:
-    """Select fusion once the chunk grid amortizes its extra dot work."""
+    """Fold the state/gradient dot into an existing MMA for compact checkpoints."""
 
-    return compact_boundaries and batch * n_chunks * heads >= _FUSED_STATE_DOT_MIN_CHUNK_HEADS
+    return compact_boundaries
 
 
 @dataclass(frozen=True)

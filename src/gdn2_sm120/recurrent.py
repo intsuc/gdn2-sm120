@@ -1,7 +1,7 @@
 """SM120 CuTe DSL kernel for token-by-token Gated DeltaNet-2 inference.
 
 The kernel is deliberately specialized for ``K == V == 128``.  A CTA owns one
-``(batch, head, value tile)`` and consists of four warps.  A CTA owns 32 value
+``(batch, head, value tile)`` and consists of two warps.  A CTA owns 16 value
 columns and warp ``w`` owns eight of them; lane ``l`` owns key rows
 ``l, l + 32, l + 64, l + 96``.  Consequently every lane keeps 32 float32
 state elements live in register memory for the complete runtime token loop.
@@ -29,16 +29,22 @@ import torch
 from cutlass.cute.runtime import from_dlpack
 
 _DIM = 128
-_WARPS = 4
-_THREADS = _WARPS * 32
 _ROWS_PER_LANE = _DIM // 32
-_VALUE_TILE = 32
-_VALUE_TILES = _DIM // _VALUE_TILE
-_COLS_PER_WARP = _VALUE_TILE // _WARPS
+_COLS_PER_WARP = 8
+_RECURRENT_WARPS = 2
+_RECURRENT_THREADS = _RECURRENT_WARPS * 32
+_RECURRENT_VALUE_TILE = _RECURRENT_WARPS * _COLS_PER_WARP
+_RECURRENT_VALUE_TILES = _DIM // _RECURRENT_VALUE_TILE
+# The zero-state T=1 kernel has almost no serial work and benefits from the
+# lower launch grid of its original four-warp/V32 schedule.  Keep it separate
+# from the finer two-warp/V16 recurrence schedule.
+_T1_ZERO_WARPS = 4
+_T1_ZERO_THREADS = _T1_ZERO_WARPS * 32
+_T1_ZERO_VALUE_TILE = _T1_ZERO_WARPS * _COLS_PER_WARP
+_T1_ZERO_VALUE_TILES = _DIM // _T1_ZERO_VALUE_TILE
 _COL_GROUP = 8
 _SHORT_RECURRENT_MAX_TOKENS = 32
 _CHUNK_ALWAYS_MIN_TOKENS = 64
-_MIDRANGE_RECURRENT_MIN_BATCH_HEADS = 32
 
 # Calling a decorated JIT function retraces enough Python to dominate a small
 # recurrent launch.  Keep explicit compiled executors instead.  T is dynamic in
@@ -72,14 +78,10 @@ def _use_recurrent_kernel(
         # The chunk API has less fixed validation overhead, but its prepare and
         # scan launches still lose to the recurrent kernel below 48 tokens.
         return True
-    if time == 48:
-        # Three complete chunks amortize the launch sequence across every
-        # measured batch/head grid; the custom autograd wrapper's fixed cost
-        # otherwise hides the token kernel's raw-latency advantage.
-        return False
-    # At 49--63 tokens a small batch/head grid benefits from chunking, including
-    # a scalar tail launch.  Larger grids keep the recurrent kernel saturated.
-    return batch * heads >= _MIDRANGE_RECURRENT_MIN_BATCH_HEADS
+    # Three complete chunks amortize the launch sequence at exactly T=48.  A
+    # partial fourth chunk needs another scalar-tail launch, so the finer V16
+    # recurrent CTA schedule wins again throughout T=49--63.
+    return time != 48
 
 
 def _chunk_forward_compatible(tensors: Sequence[torch.Tensor]) -> bool:
@@ -125,8 +127,8 @@ def _token_forward_kernel(
     block, _, _ = cute.arch.block_idx()
     lane = tidx & 31
     warp = tidx >> 5
-    value_tile = block % _VALUE_TILES
-    head_block = block // _VALUE_TILES
+    value_tile = block % _RECURRENT_VALUE_TILES
+    head_block = block // _RECURRENT_VALUE_TILES
     head = head_block % heads
     batch = head_block // heads
 
@@ -140,7 +142,7 @@ def _token_forward_kernel(
             g_state_row = cute.local_tile(
                 initial_state[batch, head, key_row, None],
                 (_COLS_PER_WARP,),
-                (value_tile * _WARPS + warp,),
+                (value_tile * _RECURRENT_WARPS + warp,),
             )
             state_row = cute.make_rmem_tensor((_COLS_PER_WARP,), cutlass.Float32)
             cute.autovec_copy(g_state_row, state_row)
@@ -175,7 +177,9 @@ def _token_forward_kernel(
         v_lane = cutlass.Float32(0.0)
         w_lane = cutlass.Float32(0.0)
         if lane < _COLS_PER_WARP:
-            lane_value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + lane
+            lane_value_col = (
+                value_tile * _RECURRENT_VALUE_TILE + warp * _COLS_PER_WARP + lane
+            )
             v_lane = v[batch, token, head, lane_value_col].to(cutlass.Float32)
             w_lane = w[batch, token, head, lane_value_col].to(cutlass.Float32)
 
@@ -217,7 +221,11 @@ def _token_forward_kernel(
                 output_value = cute.arch.warp_reduction_sum(output_partials[group_slot])
                 if lane == 0:
                     col_slot = col_group * _COL_GROUP + group_slot
-                    value_col = value_tile * _VALUE_TILE + warp * _COLS_PER_WARP + col_slot
+                    value_col = (
+                        value_tile * _RECURRENT_VALUE_TILE
+                        + warp * _COLS_PER_WARP
+                        + col_slot
+                    )
                     output[batch, token, head, value_col] = output_value.to(output.element_type)
 
         token += 1
@@ -227,7 +235,7 @@ def _token_forward_kernel(
         g_state_row = cute.local_tile(
             final_state[batch, head, key_row, None],
             (_COLS_PER_WARP,),
-            (value_tile * _WARPS + warp,),
+            (value_tile * _RECURRENT_WARPS + warp,),
         )
         state_row = cute.make_rmem_tensor((_COLS_PER_WARP,), cutlass.Float32)
         for col_slot in cutlass.range_constexpr(_COLS_PER_WARP):
@@ -252,8 +260,8 @@ def _token_forward_t1_zero_kernel(
     block, _, _ = cute.arch.block_idx()
     lane = tidx & 31
     warp = tidx >> 5
-    value_tile = block % _VALUE_TILES
-    head_block = block // _VALUE_TILES
+    value_tile = block % _T1_ZERO_VALUE_TILES
+    head_block = block // _T1_ZERO_VALUE_TILES
     head = head_block % heads
     batch = head_block // heads
 
@@ -269,7 +277,7 @@ def _token_forward_t1_zero_kernel(
 
     update_lane = cutlass.Float32(0.0)
     if lane < _COL_GROUP:
-        value_col = value_tile * _VALUE_TILE + warp * _COL_GROUP + lane
+        value_col = value_tile * _T1_ZERO_VALUE_TILE + warp * _COL_GROUP + lane
         value_value = v[batch, 0, head, value_col].to(cutlass.Float32)
         write_value = w[batch, 0, head, value_col].to(cutlass.Float32)
         update_lane = write_value * value_value
@@ -279,7 +287,7 @@ def _token_forward_t1_zero_kernel(
         update = cute.arch.shuffle_sync(update_lane, group_col)
         updates[group_col] = update
         if lane == 0:
-            value_col = value_tile * _VALUE_TILE + warp * _COL_GROUP + group_col
+            value_col = value_tile * _T1_ZERO_VALUE_TILE + warp * _COL_GROUP + group_col
             output[batch, 0, head, value_col] = (qk * update).to(output.element_type)
 
     for row_slot in cutlass.range_constexpr(_ROWS_PER_LANE):
@@ -287,7 +295,7 @@ def _token_forward_t1_zero_kernel(
         g_state_row = cute.local_tile(
             final_state[batch, head, key_row, None],
             (_COL_GROUP,),
-            (value_tile * _WARPS + warp,),
+            (value_tile * _T1_ZERO_WARPS + warp,),
         )
         state_row = cute.make_rmem_tensor((_COL_GROUP,), cutlass.Float32)
         for group_col in cutlass.range_constexpr(_COL_GROUP):
@@ -328,8 +336,8 @@ def _launch_token_forward(
         scale,
         has_initial_state,
     ).launch(
-        grid=(batch * heads * _VALUE_TILES, 1, 1),
-        block=(_THREADS, 1, 1),
+        grid=(batch * heads * _RECURRENT_VALUE_TILES, 1, 1),
+        block=(_RECURRENT_THREADS, 1, 1),
         stream=stream,
     )
 
@@ -357,8 +365,8 @@ def _launch_token_forward_t1_zero(
         heads,
         scale,
     ).launch(
-        grid=(batch * heads * _VALUE_TILES, 1, 1),
-        block=(_THREADS, 1, 1),
+        grid=(batch * heads * _T1_ZERO_VALUE_TILES, 1, 1),
+        block=(_T1_ZERO_THREADS, 1, 1),
         stream=stream,
     )
 

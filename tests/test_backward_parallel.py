@@ -116,8 +116,12 @@ def _sm120_available() -> bool:
 
 
 def test_boundary_mma_value_tile_is_shape_dependent() -> None:
-    assert _select_boundary_mma_value_tile(1, 2048, 16) == 16
+    assert _select_boundary_mma_value_tile(1, 512, 16) == 16
+    assert _select_boundary_mma_value_tile(1, 768, 16) == 8
+    assert _select_boundary_mma_value_tile(1, 2048, 16) == 8
     assert _select_boundary_mma_value_tile(1, 4096, 16) == 8
+    assert _select_boundary_mma_value_tile(1, 32768, 23) == 8
+    assert _select_boundary_mma_value_tile(1, 32768, 24) == 16
     assert _select_boundary_mma_value_tile(2, 32768, 16) == 16
     assert _select_boundary_mma_value_tile(4, 16384, 16) == 16
 

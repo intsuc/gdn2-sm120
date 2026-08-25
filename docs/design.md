@@ -121,9 +121,10 @@ dR = K_tail dS_next + A_qk.T dO
 ```
 
 The ordered scan selects a 16-column value tile (V16) when
-`batch * heads >= 32`. It also selects V16 when
-`16 <= batch * heads < 32` and `T <= 2048`; other shapes use V8. Both variants
-retain the same eight K-split warps. V16 halves duplicated reads of Y, Q-gamma,
+`batch * heads >= 24`, which launches at least 192 CTAs on the 188-SM target.
+It also selects V16 when `16 <= batch * heads < 24` and `T <= 512`; other
+shapes use V8. Both variants retain the same eight K-split warps. V16 halves
+duplicated reads of Y, Q-gamma,
 and K-tail, while V8 exposes twice as many CTAs when long serial scans would
 otherwise underfill the 188-SM target. The persistent state remains FP32 in
 registers; the full-chunk long BF16 path stores forward/reverse checkpoints in
@@ -142,12 +143,11 @@ each chunk it forms `dQ_gamma`, `dA_qk`, `dK_tail`, `dY`, `dZ`, `dE`,
 `dK_bar`, and the reverse cumulative gate gradient. The standard graph uses 12
 ordered CuTe launches. A saved forward R skips the backward `Y @ S0` launch
 and changes the paired dLower expression to the equivalent
-`-tril(dZ @ R.T)`, reducing the graph to 11 launches. On the compact BF16
-path, the state-decay dot is folded into the shared-S0 product when
-`batch * ceil(T / 16) * heads >= 2048`, reducing the saved-R graph to 10
-launches. For the canonical H16 sweep that threshold begins at T=2048 for
-B1, T=1024 for B2, and T=512 for B4. Dual-output S0/square products, paired K16
-products, and producer epilogues remove redundant reads and launch boundaries.
+`-tril(dZ @ R.T)`, reducing the graph to 11 launches. The full-chunk compact
+BF16 path always folds the state-decay dot into the shared-S0 product. This
+leaves 11 launches below the saved-R threshold and 10 launches with saved R at
+`T >= 512`. Dual-output S0/square products, paired K16 products, and producer
+epilogues remove redundant reads and launch boundaries.
 The large `16x128` and `16x16` products use warp MMA; the triangular transpose
 solve and gate chain accumulate in FP32. The boundary scan stores `dR`,
 avoiding two duplicate matrix products; compact BF16 scans round only the
@@ -191,9 +191,9 @@ unsupported for backward and omitted from the canonical benchmark sweep.
 ## Token forward
 
 The public forward selector accounts for wrapper overhead as well as kernel
-latency. `chunk_gdn2` uses recurrence below 48 tokens and chunking at exactly
-48 tokens. For `T=49--63`, it chooses chunking when `batch * heads < 32` and
-recurrence otherwise, and it uses chunking at `T >= 64`. `recurrent_gdn2` uses
+latency. `chunk_gdn2` uses recurrence below 48 tokens, chunking for the complete
+three-chunk `T=48` case, recurrence for the partial-fourth-chunk `T=49--63`
+window, and chunking at `T >= 64`. `recurrent_gdn2` uses
 recurrence below 64 tokens. From 64 tokens onward it dispatches to chunking only
 when all inputs, state, and output buffers satisfy the chunk path's 16-byte
 alignment; an unaligned call remains on the token kernel. Preallocated output
@@ -211,18 +211,20 @@ o = (scale * dot(q, k)) * z
 
 A dedicated four-warp kernel evaluates this closed form without loading the
 initial state, `g`, or `beta`; public validation of all six sequence inputs is
-unchanged. Four CTAs per `(batch, head)` retain the generic path's 32-column
+unchanged. Four CTAs per `(batch, head)` retain the closed form's 32-column
 value tiles, while each warp produces eight output columns and, for aligned
-state, two 128-bit stores per owned key row. One- and two-warp tiles exposed
-more CTAs but lost slightly to the four-warp launch on the target GPU, so they
-are not kept as runtime variants.
+state, two 128-bit stores per owned key row. One- and two-warp closed-form tiles
+exposed more CTAs but lost slightly to the four-warp launch on the target GPU,
+so they are not kept as runtime variants.
 
 All other token/recurrent calls use the register-resident recurrence below.
-Token/recurrent forward launches four value-tile CTAs per `(batch, head)`. Each
-CTA has four warps and owns 32 value columns; a warp owns eight columns and a
-lane owns four of the 128 key rows. Its FP32 state fragment remains in registers
-through the runtime token loop. Erase and output dot products use warp-shuffle
-reductions, so the kernel uses no shared memory.
+Token/recurrent forward launches eight value-tile CTAs per `(batch, head)`.
+Each CTA has two warps and owns 16 value columns; a warp owns eight columns and
+a lane owns four of the 128 key rows. The finer CTA granularity keeps the same
+total warp work while distributing underfilled decode grids across more SMs.
+Its FP32 state fragment remains in registers through the runtime token loop.
+Erase and output dot products use warp-shuffle reductions, so the kernel uses
+no shared memory.
 
 The warp advances its eight columns as one independent instruction-level
 parallel group. It first applies decay to every resident column, interleaves the

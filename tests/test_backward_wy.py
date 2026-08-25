@@ -136,12 +136,12 @@ def _sm120_available() -> bool:
 @pytest.mark.parametrize(
     ("batch", "n_chunks", "heads", "compact_boundaries", "expected"),
     [
-        pytest.param(1, 64, 16, True, False, id="b1-t1024-stays-unfused"),
-        pytest.param(1, 127, 16, True, False, id="b1-below-crossover"),
-        pytest.param(1, 128, 16, True, True, id="b1-t2048-crossover"),
-        pytest.param(2, 64, 16, True, True, id="b2-t1024-crossover"),
-        pytest.param(4, 32, 16, True, True, id="b4-t512-crossover"),
-        pytest.param(4, 16, 16, True, False, id="b4-t256-below-crossover"),
+        pytest.param(1, 8, 1, True, True, id="small-grid-compact-fuses"),
+        pytest.param(1, 64, 16, True, True, id="b1-t1024-compact-fuses"),
+        pytest.param(1, 127, 16, True, True, id="b1-old-threshold-minus-one-fuses"),
+        pytest.param(1, 128, 16, True, True, id="b1-old-threshold-fuses"),
+        pytest.param(2, 64, 16, True, True, id="b2-t1024-compact-fuses"),
+        pytest.param(4, 16, 16, True, True, id="b4-t256-compact-fuses"),
         pytest.param(4, 128, 16, False, False, id="fp32-boundaries-never-fuse"),
     ],
 )

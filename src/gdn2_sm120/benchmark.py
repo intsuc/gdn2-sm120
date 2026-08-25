@@ -9,6 +9,7 @@ import math
 import statistics
 import subprocess
 import sys
+import time
 import types
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -20,6 +21,13 @@ from .ops import chunk_gdn2, recurrent_gdn2
 
 OFFICIAL_COMMIT = "95709fc250357c2dd109361c353192f2aa5913f9"
 FLA_COMMIT = "4b02d15d6a68700181b180235be62a9fb95d2a38"
+
+# Count-based warmups for short kernels can finish before the device leaves its
+# idle clock state. Keep the requested count, then hold each implementation
+# under load long enough to make process-to-process medians comparable.
+_GEMM_CLOCK_STABILIZATION_SECONDS = 0.25
+_TARGET_CLOCK_STABILIZATION_SECONDS = 0.75
+_CLOCK_STABILIZATION_DIMENSION = 4_096
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,7 @@ class BenchmarkResult:
     heads: int
     dtype: str
     warmup: int
+    clock_stabilization_ms: int
     repeats: int
     cute: Timing
     triton: Timing | None
@@ -51,10 +60,29 @@ class BenchmarkResult:
     cuda_runtime: str
 
 
+def _stabilize_cuda_clocks() -> None:
+    shape = (_CLOCK_STABILIZATION_DIMENSION, _CLOCK_STABILIZATION_DIMENSION)
+    left = torch.empty(shape, device="cuda", dtype=torch.bfloat16)
+    right = torch.empty(shape, device="cuda", dtype=torch.bfloat16)
+    output = torch.empty(shape, device="cuda", dtype=torch.bfloat16)
+    stabilization_deadline = time.perf_counter() + _GEMM_CLOCK_STABILIZATION_SECONDS
+    while time.perf_counter() < stabilization_deadline:
+        torch.mm(left, right, out=output)
+        torch.cuda.synchronize()
+
+
 def _measure(call: Callable[[], object], warmup: int, repeats: int) -> Timing:
     for _ in range(warmup):
         call()
     torch.cuda.synchronize()
+
+    _stabilize_cuda_clocks()
+    stabilization_deadline = time.perf_counter() + _TARGET_CLOCK_STABILIZATION_SECONDS
+    while time.perf_counter() < stabilization_deadline:
+        call()
+        # Synchronize to bound retained-graph gradient allocations and make the
+        # stabilization interval describe elapsed GPU work rather than queuing.
+        torch.cuda.synchronize()
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -338,6 +366,10 @@ def run_benchmark(args: argparse.Namespace) -> BenchmarkResult:
         heads=args.heads,
         dtype=args.dtype,
         warmup=args.warmup,
+        clock_stabilization_ms=round(
+            (_GEMM_CLOCK_STABILIZATION_SECONDS + _TARGET_CLOCK_STABILIZATION_SECONDS)
+            * 1_000
+        ),
         repeats=args.repeats,
         cute=cute_timing,
         triton=triton_timing,

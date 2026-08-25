@@ -58,13 +58,12 @@ _BOUNDARY_MMA_THREADS = 32 * _BOUNDARY_MMA_WARPS
 _BOUNDARY_MMA_VALUE_TILE = 8
 _BOUNDARY_MMA_WIDE_VALUE_TILE = 16
 # V8 exposes sixteen independent value CTAs per (batch, head), while V16
-# halves duplicated Y/Q-gamma/K-tail reads.  A B1/H16 grid benefits from V16
-# through T=2048, but long serial CTAs underfill the 188-SM target from T=4096
-# onward.  Two batches provide enough independent scans to retain V16 at all
-# measured sequence lengths.
+# halves duplicated Y/Q-gamma/K-tail reads.  V16 needs 24 batch-heads to put
+# at least 192 CTAs on the 188-SM target.  Smaller midrange grids benefit from
+# the duplicated-read saving only while the ordered scan remains short.
 _BOUNDARY_MMA_MIDRANGE_MIN_BATCH_HEADS = 16
-_BOUNDARY_MMA_MIDRANGE_MAX_TIME = 2048
-_BOUNDARY_MMA_WIDE_MIN_BATCH_HEADS = 32
+_BOUNDARY_MMA_MIDRANGE_MAX_TIME = 512
+_BOUNDARY_MMA_WIDE_MIN_BATCH_HEADS = 24
 _AQK_PRECOMPUTE_WARPS = 8
 _AQK_PRECOMPUTE_THREADS = 32 * _AQK_PRECOMPUTE_WARPS
 _AQK_PRECOMPUTE_VALUES = _AQK_PRECOMPUTE_WARPS * _BOUNDARY_MMA_VALUE_TILE
@@ -85,7 +84,7 @@ _FULL_MIN_CTAS = 384
 
 
 def _select_boundary_mma_value_tile(batch: int, time: int, heads: int) -> int:
-    """Choose V16 for filled grids and for the measured B1 midrange window."""
+    """Choose V16 for filled grids and short underfilled midrange scans."""
 
     batch_heads = batch * heads
     if batch_heads >= _BOUNDARY_MMA_WIDE_MIN_BATCH_HEADS:

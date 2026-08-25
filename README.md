@@ -110,9 +110,9 @@ output buffers are validated for shape, dtype, device, contiguity, and unsafe
 storage overlap.
 
 The public APIs dispatch at their measured crossover. `chunk_gdn2` uses the
-recurrent forward below `T=48`, the chunk forward at `T=48`, and a shape-aware
-choice at `T=49--63`: chunk when `batch * heads < 32`, recurrent otherwise.
-At `T >= 64` it uses chunk forward. `recurrent_gdn2` keeps the recurrent kernel
+recurrent forward below `T=48`, chunk forward for the complete three-chunk
+`T=48` case, recurrent forward again for `T=49--63`, and chunk forward at
+`T >= 64`. `recurrent_gdn2` keeps the recurrent kernel
 for `T < 64`. At `T >= 64` it uses chunk forward when every input, state, and
 destination buffer is 16-byte aligned; otherwise it retains the token path.
 Reusable output buffers and in-place final-state semantics are preserved across
@@ -203,29 +203,29 @@ Representative BF16 medians on the target workstation are:
 
 | Path | Shape | CuTe SM120 | Official Triton | Speedup |
 |---|---:|---:|---:|---:|
-| chunk forward | B1 T16 H16 | 35.3 us | 181.8 us | **5.15x** |
-| chunk forward | B1 T512 H16 | 65.9 us | 181.6 us | **2.76x** |
-| chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
-| chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
-| chunk forward | B1 T32768 H16 | 3725.3 us | 4231.9 us | **1.14x** |
-| chunk forward | B2 T32768 H16 | 6155.5 us | 7955.2 us | **1.29x** |
-| chunk forward | B4 T32768 H16 | 11553.5 us | 15661.8 us | **1.36x** |
-| chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
-| chunk backward | B1 T64 H16 | 131.6 us | 279.0 us | **2.12x** |
-| chunk backward | B1 T512 H16 | 172.1 us | 329.6 us | **1.91x** |
-| chunk backward | B1 T2048 H16 | 639.0 us | 704.5 us | **1.10x** |
-| chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
-| chunk backward | B1 T32768 H16 | 11737.6 us | 12638.0 us | **1.08x** |
-| chunk backward | B2 T8192 H16 | 5582.7 us | 5675.6 us | **1.02x** |
-| chunk backward | B2 T32768 H16 | 22679.8 us | 22951.8 us | **1.01x** |
-| chunk backward | B4 T256 H16 | 271.4 us | 392.1 us | **1.44x** |
-| chunk backward | B4 T16384 H16 | 21906.1 us | 22145.8 us | **1.01x** |
-| token forward | B1 T1 H16 | 13.5 us | 26.0 us | **1.93x** |
-| token forward | B1 T128 H16 | 84.5 us | 119.3 us | **1.41x** |
-| token forward | B2 T1 H16 | 13.5 us | 25.7 us | **1.90x** |
-| token forward | B2 T128 H16 | 84.5 us | 119.3 us | **1.41x** |
-| token forward | B4 T1 H16 | 16.0 us | 24.8 us | **1.55x** |
-| token forward | B4 T128 H16 | 115.2 us | 132.5 us | **1.15x** |
+| chunk forward | B1 T16 H16 | 23.0 us | 179.8 us | **7.80x** |
+| chunk forward | B1 T512 H16 | 65.0 us | 181.3 us | **2.79x** |
+| chunk forward | B1 T2048 H16 | 173.4 us | 236.8 us | **1.37x** |
+| chunk forward | B1 T16384 H16 | 1894.2 us | 2115.3 us | **1.12x** |
+| chunk forward | B1 T32768 H16 | 3735.6 us | 4237.2 us | **1.13x** |
+| chunk forward | B2 T32768 H16 | 6155.1 us | 7958.6 us | **1.29x** |
+| chunk forward | B4 T32768 H16 | 11585.3 us | 15672.8 us | **1.35x** |
+| chunk backward | B1 T16 H16 | 113.9 us | 278.0 us | **2.44x** |
+| chunk backward | B1 T64 H16 | 132.5 us | 280.8 us | **2.12x** |
+| chunk backward | B1 T512 H16 | 134.5 us | 280.1 us | **2.08x** |
+| chunk backward | B1 T2048 H16 | 556.8 us | 708.6 us | **1.27x** |
+| chunk backward | B1 T16384 H16 | 5248.4 us | 6317.5 us | **1.20x** |
+| chunk backward | B1 T32768 H16 | 10662.7 us | 12600.6 us | **1.18x** |
+| chunk backward | B2 T8192 H16 | 5067.7 us | 5745.6 us | **1.13x** |
+| chunk backward | B2 T32768 H16 | 20539.7 us | 23008.7 us | **1.12x** |
+| chunk backward | B4 T256 H16 | 259.0 us | 391.3 us | **1.51x** |
+| chunk backward | B4 T16384 H16 | 19745.4 us | 22163.9 us | **1.12x** |
+| token forward | B1 T1 H16 | 13.1 us | 25.0 us | **1.91x** |
+| token forward | B1 T128 H16 | 53.6 us | 120.3 us | **2.24x** |
+| token forward | B2 T1 H16 | 13.1 us | 24.6 us | **1.88x** |
+| token forward | B2 T128 H16 | 62.9 us | 120.4 us | **1.91x** |
+| token forward | B4 T1 H16 | 14.8 us | 24.7 us | **1.67x** |
+| token forward | B4 T128 H16 | 92.4 us | 132.6 us | **1.43x** |
 
 ## Why FROST is not copied directly
 
@@ -251,16 +251,15 @@ every independent `A_qk.T @ dO` product, then runs a reverse boundary scan
 with 128-bit `cp.async` staging and shuffle-cached decay. The full-chunk BF16
 path emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32;
 partial tails retain FP32 boundaries and `dR`. The ordered scan uses V16 when
-`batch * heads >= 32`, plus the midrange where `16 <= batch * heads < 32` and
-`T <= 2048`; other shapes use V8. V16 halves duplicated Y/Q-gamma/K-tail reads,
-while V8 exposes twice as many CTAs for long underfilled grids; both retain the
-same eight K-split warps. The standard chunk-local compact-WY graph combines
-paired products and producer epilogues into 12 launches. The saved forward R
-skips its `Y @ S0` launch and reduces the paired dLower product to
-`-tril(dZ @ R.T)`, leaving 11. On the compact BF16 path the state/gradient
-decay dot can be folded into a large state-product kernel, reducing the saved-R
-graph to 10 launches when
-`batch * ceil(T / 16) * heads >= 2048`.
+`batch * heads >= 24`, plus the short midrange where
+`16 <= batch * heads < 24` and `T <= 512`; other shapes use V8. V16 halves
+duplicated Y/Q-gamma/K-tail reads, while V8 exposes twice as many CTAs for long
+underfilled grids; both retain the same eight K-split warps. The standard
+chunk-local compact-WY graph combines paired products and producer epilogues
+into 12 launches. The saved forward R skips its `Y @ S0` launch and reduces the
+paired dLower product to
+`-tril(dZ @ R.T)`. Full-chunk BF16 also folds the state/gradient decay dot into
+the shared-S0 product, so the saved-R graph uses 10 launches at `T >= 512`.
 
 When a loss does not consume the final state, the long backward passes a
 zero-terminal specialization into the boundary scan. It initializes the
@@ -281,12 +280,14 @@ log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
 non-default CUDA streams, unaligned contiguous recurrent states, reusable
 output buffers, and explicit in-place recurrent state updates. In the measured
 B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
-at every sampled length through T=32768. Chunk backward remains faster for all
-B1 and B2 points and all 10 measured B4 points through T=16384. B4/T32768
-backward is not benchmarked because one saved state-boundary tensor exceeds
-CuTe's 4-GiB per-launch byte-address range. Token forward is measured with the
-same fixed H16 and B1/B2/B4 batch matrix and remains faster at all 24 points
-through T=128. The checkpointed path trades memory for speed: compact BF16
+at all 33 sampled lengths through T=32768. Chunk backward remains faster for
+all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
+narrowest forward and backward margins are 1.07x at B1/T8192 and
+1.08x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
+because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
+byte-address range. Token forward is measured with the same fixed H16 and
+B1/B2/B4 batch matrix and remains faster at all 24 points through T=128. The
+checkpointed path trades memory for speed: compact BF16
 boundaries halve checkpoint bytes relative to FP32, but the CuTe path still
 retains both boundary sets and compact-WY workspace and therefore uses more
 memory than the official path. Additional dimensions, packed sequences, and
