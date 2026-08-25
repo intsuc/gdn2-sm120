@@ -560,8 +560,7 @@ def test_mixed_batch_chunk_sweeps_use_dodged_dumbbells_trends_and_speedup_rows(
 
         assert list(axis.get_xticks()) == pytest.approx([4.0, 6.0, 7.0, 8.0])
         assert [tick.get_text() for tick in axis.get_xticklabels()] == ["16", "64", "128", "256"]
-        assert axis.get_xlabel().startswith("Sequence length T (log₂ spacing) · fixed H16")
-        assert "dodged left→right" in axis.get_xlabel()
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · fixed H16"
 
         keys = [text for text in axis.texts if text.get_gid() == "chunk-rail-key"]
         assert [text.get_text() for text in keys] == ["B1", "B2", "B4"]
@@ -631,6 +630,7 @@ def test_chunk_dodge_separates_groups_with_the_same_batch_and_different_heads(
             "B1/H16",
             "B1/H32",
         ]
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · grouped by B/H"
         assert (
             len(
                 [

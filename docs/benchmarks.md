@@ -282,12 +282,9 @@ uv run --group visualization gdn2-sm120-plot \
 it with `-dark` appended to the stem.
 
 The plot uses medians only. A minimum is not a dispersion estimate or confidence
-interval, so it is deliberately not drawn as an error bar. The three panels are
-stacked vertically. Within each chunk panel, fixed-H16 B1/B2/B4 observations are
-dodged left-to-right around every shared log₂-spaced T tick. A short connector
-pairs CuTe with Official Triton for each shape, faint solid/dashed/dotted lines
-retain the within-batch trends, and the speedup rail remains centered on the
-true T positions. When all token points share B and H, the token panel connects
+interval, so it is deliberately not drawn as an error bar. The chunk panels
+compare fixed-H16 B1/B2/B4 measurements and label the official/CuTe speedup at
+every measured T. When all token points share B and H, the token panel connects
 them at log₂-spaced T positions and labels the official/CuTe speedup at every
 sample. If either B or H differs, it falls back to independent grouped bars
 rather than implying a scaling curve across different workloads.

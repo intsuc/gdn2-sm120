@@ -642,12 +642,7 @@ def _plot_multi_shape_chunk_panel(
     shape_suffix = (
         f"fixed H{next(iter(head_counts))}" if len(head_counts) == 1 else "grouped by B/H"
     )
-    group_order = " / ".join(
-        f"B{batch}" if len(head_counts) == 1 else f"B{batch}/H{heads}" for batch, heads in shapes
-    )
-    axis.set_xlabel(
-        f"Sequence length T (log₂ spacing) · {shape_suffix} · {group_order} dodged left→right"
-    )
+    axis.set_xlabel(f"Sequence length T (log₂ spacing) · {shape_suffix}")
 
     if log_latency:
         axis.set_yscale("log", base=2)

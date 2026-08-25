@@ -165,7 +165,7 @@ untimed check compares outputs, state, or all gradients before timing. See
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmark-results-sm120-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/benchmark-results-sm120.png">
-  <img alt="Three vertically stacked Gated DeltaNet-2 SM120 benchmark latency panels" src="docs/assets/benchmark-results-sm120.png">
+  <img alt="Gated DeltaNet-2 SM120 benchmark latency comparison" src="docs/assets/benchmark-results-sm120.png">
 </picture>
 
 The light/fallback and dark-theme figures are generated from the tracked,
@@ -181,16 +181,6 @@ uv run --group visualization gdn2-sm120-plot \
 
 `--output` names the light/fallback figure; the plotter also writes the sibling
 `docs/assets/benchmark-results-sm120-dark.png`.
-
-The three full-width panels are stacked vertically. In each chunk panel, the
-fixed-H16 B1/B2/B4 observations are dodged left-to-right around their true T
-tick. A short connector pairs CuTe with Official Triton at each shape, while
-faint batch-styled lines preserve the scaling trend and the rail remains
-aligned to the true T positions. When every token-forward point has the same
-batch and head count, its panel is a connected sequence-length sweep with
-log₂-spaced T positions and a speedup label at every sample. Mixed B/H token
-shapes remain independent grouped bars, so the figure does not imply a scaling
-curve across different workloads.
 
 Representative BF16 medians on the target workstation are:
 
