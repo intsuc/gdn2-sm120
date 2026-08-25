@@ -18,8 +18,8 @@ The repository contains three working CUDA paths:
 
 All three are written in CuTe DSL, compile specifically for `sm_120`, use the
 active PyTorch CUDA stream, and cache TVM-FFI executors after the first JIT
-compilation. A PyTorch `autograd.Function` connects the chunk forward and
-backward kernels.
+compilation. A PyTorch `autograd.Function` connects the shape-dispatched
+forward path and backward kernels.
 
 ## Quick start
 
@@ -72,7 +72,7 @@ output, final_state = chunk_gdn2(
 loss = output.float().square().mean() + final_state.square().mean()
 loss.backward()
 
-# Decoding or short recurrent evaluation: forward-only.
+# Forward-only; the wrapper selects the recurrent or chunk schedule.
 output, final_state = recurrent_gdn2(q, k, v, g, beta, w, initial_state)
 
 # Allocation-free serving: reuse both destinations.
@@ -109,6 +109,15 @@ default remains allocation-based and never mutates `initial_state`; explicit
 output buffers are validated for shape, dtype, device, contiguity, and unsafe
 storage overlap.
 
+The public APIs dispatch at their measured crossover. `chunk_gdn2` uses the
+recurrent forward below `T=48`, the chunk forward at `T=48`, and a shape-aware
+choice at `T=49--63`: chunk when `batch * heads < 32`, recurrent otherwise.
+At `T >= 64` it uses chunk forward. `recurrent_gdn2` keeps the recurrent kernel
+for `T < 64`. At `T >= 64` it uses chunk forward when every input, state, and
+destination buffer is 16-byte aligned; otherwise it retains the token path.
+Reusable output buffers and in-place final-state semantics are preserved across
+this dispatch.
+
 For the common first decode token (`T=1`, `initial_state=None`), the token path
 uses the exact closed form `S = outer(k, w * v)` and
 `o = scale * dot(q, k) * (w * v)`. The public shape/dtype/device checks for
@@ -122,14 +131,22 @@ first specialization. Unsupported devices and shapes fail explicitly; there
 is no silent fallback.
 
 For gradient-enabled calls of 64 tokens or more, the forward saves states at
-every BT=16 boundary. BF16 full chunks at T>=128 use compact BF16 `S`/`dS`
-checkpoints, while the reverse scan preserves the exact FP32 `dS0` separately;
-FP16, T=64--127, and partial-tail paths retain FP32 boundaries. Backward uses
-these local checkpoints instead of inverting the complete sequence from one
-rounded final state. At T=64 it uses the full compact-WY tensor-core VJP when
-the batch/head grid supplies at least 64 chunk-head CTAs; smaller T=64 grids
-retain the chunk-local VJP. T>=128 always dispatches to compact-WY. Forward-only
-calls do not allocate training checkpoints.
+every BT=16 boundary. At `T >= 128`, sequence auxiliaries are compact even
+when the sequence has a partial tail. Full-chunk BF16 sequences use compact
+BF16 `S`/`dS` checkpoints, while the reverse scan preserves the exact FP32
+`dS0` separately; FP16, `T=64--127`, and partial-tail paths retain FP32
+boundaries.
+For a partial tail, forward scans the full prefix with MMA and runs only the
+last short chunk through the scalar recurrence. At `T >= 128`, reverse
+processes that scalar tail first, then scans the full prefix with MMA. At T=64
+the full compact-WY tensor-core VJP is used when the batch/head grid supplies
+at least 64 chunk-head CTAs; smaller T=64 grids retain the chunk-local VJP.
+`T >= 128` always dispatches to compact-WY. Forward-only calls do not allocate
+training checkpoints.
+
+Below T=64, the short backward uses one-warp V8 value tiles. Its first kernel
+writes final-form `dq`/`dk`/`dg`/`dbeta` FP32 partials, leaving a sum-only
+reduction that does not reload K/beta/g or recompute `exp(g)`.
 
 ## Benchmark against the official Triton implementation
 
@@ -222,12 +239,15 @@ therefore use a schedule designed for SM120 rather than a direct FROST port.
 
 For long BF16 training, Y, raw Q-gamma, K-tail, A-qk, and the persistent
 E/K-bar MMA operands use BF16, while U, chunk decay, and gamma remain FP32.
-At T>=512 the forward scan consumes a temporary compact Q-effective scratch
-for the rearranged output identity while preserving raw Q-gamma and A-qk
-checkpoint bits for backward. Backward first precomputes every independent
-`A_qk.T @ dO` product, then runs a reverse boundary scan with 128-bit
-`cp.async` staging and shuffle-cached decay. It emits compact BF16 `dR` and
-`dS` operands while retaining `dS0` in FP32. The ordered scan uses V16 when
+When a BF16 sequence contains at least 32 full chunks, including a sequence
+with a partial tail, the forward scan consumes a temporary compact Q-effective
+scratch for the rearranged output identity. Training preserves raw Q-gamma and
+A-qk checkpoint bits for backward; forward-only partial calls retain the
+tail's raw Q-gamma and A-qk for its scalar scan. Backward first precomputes
+every independent `A_qk.T @ dO` product, then runs a reverse boundary scan
+with 128-bit `cp.async` staging and shuffle-cached decay. The full-chunk BF16
+path emits compact BF16 `dR` and `dS` operands while retaining `dS0` in FP32;
+partial tails retain FP32 boundaries and `dR`. The ordered scan uses V16 when
 `batch * heads >= 32`, plus the midrange where `16 <= batch * heads < 32` and
 `T <= 2048`; other shapes use V8. V16 halves duplicated Y/Q-gamma/K-tail reads,
 while V8 exposes twice as many CTAs for long underfilled grids; both retain the

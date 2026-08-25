@@ -285,10 +285,11 @@ def test_token_forward_uses_current_stream() -> None:
 
 
 @pytest.mark.skipif(not _cuda_available(), reason="requires an SM120 CUDA GPU")
-def test_token_forward_supports_unaligned_contiguous_initial_state() -> None:
+@pytest.mark.parametrize("time", [3, 64], ids=["recurrent", "chunk-fallback"])
+def test_token_forward_supports_unaligned_contiguous_initial_state(time: int) -> None:
     torch.manual_seed(2026)
     device = torch.device("cuda")
-    shape = (1, 3, 1, 128)
+    shape = (1, time, 1, 128)
     q = (torch.randn(shape, device=device) * 0.1).bfloat16()
     k = (torch.randn(shape, device=device) * 0.1).bfloat16()
     v = (torch.randn(shape, device=device) * 0.1).bfloat16()
@@ -379,6 +380,49 @@ def test_token_forward_supports_preallocated_outputs() -> None:
             initial_state,
             final_state_out=initial_state,
         )
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="requires an SM120 CUDA GPU")
+@pytest.mark.parametrize("inplace", [False, True], ids=["preallocated", "inplace"])
+def test_recurrent_api_chunk_dispatch_preserves_output_buffers(inplace: bool) -> None:
+    torch.manual_seed(6401 + inplace)
+    device = torch.device("cuda")
+    shape = (1, 64, 1, 128)
+    q, k, v, beta, w = [(torch.randn(shape, device=device) * 0.1).bfloat16() for _ in range(5)]
+    g = -torch.rand(shape, device=device, dtype=torch.float32) * 0.04
+    initial_state = torch.randn((1, 1, 128, 128), device=device) * 0.1
+    expected_output, expected_state = recurrent_forward_reference(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state.clone(),
+        scale=0.125,
+    )
+    output_buffer = torch.empty_like(q)
+    state_buffer = None if inplace else torch.empty_like(initial_state)
+
+    output, final_state = recurrent_gdn2(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        w,
+        initial_state,
+        scale=0.125,
+        out=output_buffer,
+        final_state_out=state_buffer,
+        inplace_final_state=inplace,
+    )
+
+    assert output is output_buffer
+    assert final_state is (initial_state if inplace else state_buffer)
+    assert expected_state is not None
+    torch.testing.assert_close(output, expected_output, rtol=3e-2, atol=3e-2)
+    torch.testing.assert_close(final_state, expected_state, rtol=3e-2, atol=1.5e-3)
 
 
 @pytest.mark.skipif(not _cuda_available(), reason="requires an SM120 CUDA GPU")

@@ -10,7 +10,7 @@ from .backward import chunk_backward
 from .backward_parallel import WYBoundaryAux, parallel_chunk_vjp, wy_boundary_dstate
 from .backward_wy import compact_wy_chunk_vjp_cute
 from .chunk import ChunkForwardAux, chunk_forward
-from .recurrent import token_forward
+from .recurrent import _use_recurrent_kernel, token_forward
 
 _DIM = 128
 _CHUNK_SIZE = 16
@@ -45,17 +45,43 @@ class _ChunkGDN2(torch.autograd.Function):
         prepare_backward: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         use_parallel_backward = q.shape[1] >= _PARALLEL_BACKWARD_MIN_TOKENS and prepare_backward
-        forward_result = chunk_forward(
-            q,
-            k,
-            v,
-            g,
-            beta,
-            w,
-            initial_state,
-            scale=scale,
-            return_aux=use_parallel_backward,
+        use_recurrent_forward = _use_recurrent_kernel(
+            q.shape[0],
+            q.shape[1],
+            q.shape[2],
+            chunk_api=True,
         )
+        if use_recurrent_forward:
+            # autograd.Function.forward receives requires-grad inputs even
+            # though its body runs without graph recording.  CuTe's recurrent
+            # compile descriptors use DLPack, so pass storage-sharing detached
+            # views and let this Function provide the backward edge.
+            recurrent_inputs = tuple(
+                tensor.detach() if tensor.requires_grad else tensor
+                for tensor in (q, k, v, g, beta, w)
+            )
+            recurrent_state = (
+                initial_state.detach()
+                if initial_state is not None and initial_state.requires_grad
+                else initial_state
+            )
+            forward_result = token_forward(
+                *recurrent_inputs,
+                recurrent_state,
+                scale=scale,
+            )
+        else:
+            forward_result = chunk_forward(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                w,
+                initial_state,
+                scale=scale,
+                return_aux=use_parallel_backward,
+            )
         if use_parallel_backward:
             output, final_state, aux = forward_result
             ctx.save_for_backward(
@@ -211,7 +237,7 @@ def chunk_gdn2(
     scale: float | None = None,
     output_final_state: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Run chunkwise GDN2 with the native SM120 backward under autograd.
+    """Run GDN2 with shape-dispatched SM120 forward and native backward.
 
     Sequence tensors use contiguous ``[B, T, H, 128]`` layout. Q/K/V/beta/w
     are FP16 or BF16, ``g`` may additionally be FP32, and state tensors are
@@ -257,7 +283,7 @@ def recurrent_gdn2(
     final_state_out: torch.Tensor | None = None,
     inplace_final_state: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run the forward-only token/recurrent SM120 kernel."""
+    """Run forward-only GDN2 with recurrent/chunk crossover dispatch."""
 
     return token_forward(
         q,

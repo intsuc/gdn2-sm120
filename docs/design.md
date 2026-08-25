@@ -38,15 +38,21 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 3. warp-local FP32 results are reduced through shared memory. Full-chunk paths
    stage Y/Q with 128-bit `cp.async` copies and cache the 128-element decay
    vector once per CTA rather than loading it independently from every warp.
-   T<512 uses an eight-column value tile (V8). At T>=512, the launcher keeps
-   V8 when `batch * heads < 12`, exposing 16 CTAs per batch/head so a small
-   grid can fill the 188 SMs. From 12 batch-heads onward it selects V16, whose
-   eight CTAs per batch/head halve duplicated scan traffic. Both schedules keep
-   the same eight-warp K16 split. The algebraic V16 schedule interleaves Y/Q
-   partials in one shared allocation; algebraic V8 uses a separate K-tail tile
-   because its smaller state staging allocation cannot safely hold 16x16.
+   With `ceil(T / 16) < 32` it uses an eight-column value tile (V8). From 32
+   chunks onward, the launcher keeps V8 when `batch * heads < 12`, exposing 16
+   CTAs per batch/head so a small grid can fill the 188 SMs. From 12
+   batch-heads onward it selects V16, whose eight CTAs per batch/head halve
+   duplicated scan traffic. Both schedules keep the same eight-warp K16 split.
+   The algebraic V16 schedule interleaves Y/Q partials in one shared allocation;
+   algebraic V8 uses a separate K-tail tile because its smaller state staging
+   allocation cannot safely hold 16x16;
+4. when a sequence ends in a partial chunk, the MMA scan handles all
+   `floor(T / 16)` full chunks and materializes the prefix state. A one-chunk
+   scalar scan consumes that state and handles only the final tail. Sequences
+   shorter than one full chunk remain entirely on the scalar path.
 
-For full-chunk BF16 calls at T>=512, the output identity
+For BF16 calls with at least 32 full chunks, including partial-tail lengths,
+the output identity
 
 ```text
 R = U - Y S
@@ -62,7 +68,9 @@ avoid overflow in an intermediate that would cancel algebraically. Long BF16
 training uses the rearranged expression too, but writes Q-effective to a
 temporary compact scratch consumed only by the state scan. It independently
 preserves raw Q-gamma and A-qk checkpoint bits for backward instead of
-overwriting their public auxiliary buffers.
+overwriting their public auxiliary buffers. A forward-only partial-tail call
+also keeps the final chunk's raw Q-gamma and A-qk because its scalar tail scan
+uses the original expression.
 
 The BF16 specialization is validated for normalized Q/K and bounded model
 activations. Values near the BF16 format limit are outside its numerical
@@ -70,16 +78,17 @@ contract because a rearranged intermediate can overflow before a later
 algebraic cancellation.
 
 Forward-only calls use compact FP16/BF16 intermediates that are not exposed. A
-gradient-enabled full-chunk call at T>=128 checkpoints Y, Q-gamma, K-tail, and
-A-qk in the input dtype because every downstream tensor-core consumer would
-immediately narrow them to that dtype. U and chunk decay remain FP32. BF16 full
-chunks also store compact BF16 state boundaries; FP16, short, and partial-tail
-training calls retain FP32 boundaries. The chunk size differs from the official
+gradient-enabled call at `T >= 128` checkpoints Y, Q-gamma, K-tail, and A-qk
+in the input dtype, including for a partial-tail sequence, because every
+downstream tensor-core consumer would immediately narrow them to that dtype.
+U and chunk decay remain FP32. Full-chunk BF16 sequences also store compact
+BF16 state boundaries; FP16, short, and partial-tail training calls retain FP32
+boundaries. The chunk size differs from the official
 Triton path's C=64 because BT=16 exposes more CTAs and stays below the SM120
-shared-memory limit. At T>=512, Q-effective adds one temporary input-dtype
-sequence scratch whose lifetime ends with forward; it is not returned in
-`ChunkForwardAux`, and the raw Q-gamma/A-qk auxiliaries remain bit-identical to
-the non-rearranged training path.
+shared-memory limit. With at least 32 full BF16 chunks, Q-effective adds one
+temporary input-dtype sequence scratch whose lifetime ends with forward; it is
+not returned in `ChunkForwardAux`, and the raw Q-gamma/A-qk auxiliaries remain
+bit-identical to the non-rearranged training path.
 
 ## Backward
 
@@ -93,24 +102,33 @@ X = y + outer(k, c)
 S_previous = Diag(exp(-g)) X
 ```
 
+Except for the fused T=1 path, the short final-state-only backward assigns one
+V8 value tile to each one-warp CTA. K-side inputs and gate evaluation are
+shared across its two V4 subtiles. The first kernel writes final-form
+`dq`/`dk`/`dg`/`dbeta` FP32 partials with the gradient channel innermost, so
+the second kernel only sums value-tile contributions and does not reload
+K/beta/g or recompute `exp(g)`.
+
 This remains the lowest-overhead path below T=64. At T=64 and above, forward
-saves every BT=16 boundary. For a full T=64 sequence, as for full sequences at
-T>=128, an eight-warp K-split MMA boundary scan computes both the reverse state
-boundaries and
+saves every BT=16 boundary. At T=64 and T>=128, an eight-warp K-split MMA
+boundary scan computes the reverse state boundaries together with
 
 ```text
 dR = K_tail dS_next + A_qk.T dO
 ```
 
-using a K-split eight-warp MMA schedule. The ordered scan selects a 16-column
-value tile (V16) when `batch * heads >= 32`. It also selects V16 when
+The ordered scan selects a 16-column value tile (V16) when
+`batch * heads >= 32`. It also selects V16 when
 `16 <= batch * heads < 32` and `T <= 2048`; other shapes use V8. Both variants
 retain the same eight K-split warps. V16 halves duplicated reads of Y, Q-gamma,
 and K-tail, while V8 exposes twice as many CTAs when long serial scans would
 otherwise underfill the 188-SM target. The persistent state remains FP32 in
-registers; the long BF16 path stores forward/reverse checkpoints in BF16 and
-returns the exact FP32 initial-state gradient separately. T=64 through T=127
-retain FP32 boundaries.
+registers; the full-chunk long BF16 path stores forward/reverse checkpoints in
+BF16 and returns the exact FP32 initial-state gradient separately. T=64 through
+T=127 and all partial-tail paths retain FP32 boundaries. For a partial tail at
+`T >= 128`, a scalar reverse scan processes the tail first and produces the
+prefix-end gradient; the ordered MMA scan then walks the full chunks in
+reverse.
 
 At T=64, the parameter VJP selects the full compact-WY graph only when
 `batch * (T / 16) * heads >= 64`; this CTA-aware threshold is equivalent to
@@ -160,6 +178,16 @@ calculation. B4/T32768/H16 BF16 exceeds the limit and is consequently
 unsupported for backward and omitted from the canonical benchmark sweep.
 
 ## Token forward
+
+The public forward selector accounts for wrapper overhead as well as kernel
+latency. `chunk_gdn2` uses recurrence below 48 tokens and chunking at exactly
+48 tokens. For `T=49--63`, it chooses chunking when `batch * heads < 32` and
+recurrence otherwise, and it uses chunking at `T >= 64`. `recurrent_gdn2` uses
+recurrence below 64 tokens. From 64 tokens onward it dispatches to chunking only
+when all inputs, state, and output buffers satisfy the chunk path's 16-byte
+alignment; an unaligned call remains on the token kernel. Preallocated output
+and final state buffers, including explicit in-place state update, keep the
+same public semantics on either path.
 
 When `T=1` and no initial state is supplied, decay and erase multiply only the
 zero previous state. The recurrence therefore reduces exactly to

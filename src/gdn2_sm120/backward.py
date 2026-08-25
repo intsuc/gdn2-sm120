@@ -1,7 +1,7 @@
 """SM120 CuTe DSL backward for the Gated Delta Rule-2 recurrence.
 
 The kernels are deliberately specialized for ``K == V == 128``.  The
-final-state-only path handles up to 128 tokens with one CTA per four-column
+final-state-only path handles up to 128 tokens with one CTA per eight-column
 value tile; K-shaped gradients are emitted as FP32 tile partials and reduced
 in a second kernel.  The latency-sensitive single-token case retains a fused
 eight-warp CTA with no global partials.
@@ -44,11 +44,13 @@ _DIM = 128
 _WARPS = 8
 _THREADS = _WARPS * 32
 _V_PER_WARP = _DIM // _WARPS
-_TILED_V = 4
+_TILED_V = 8
 _VALUE_TILES = _DIM // _TILED_V
 _TILED_KEYS_PER_LANE = 16
+_TILED_LANE_VALUES = 4
 _TILED_THREADS = 32
-_TILED_SMEM_BYTES = (_DIM * _TILED_V + 4 * _DIM) * 4
+_TILED_KEY_FIELDS = 5
+_TILED_SMEM_BYTES = (_DIM * _TILED_V + _TILED_KEY_FIELDS * _DIM) * 4
 # Compatibility name retained for callers that imported the former hard cap.
 # It is now the largest length handled by the final-state-only inverse path;
 # longer inputs dispatch to checkpoint/recompute.
@@ -390,12 +392,15 @@ def _chunk_backward_value_tiled_kernel(
     partial: cute.Tensor,
     scale: cutlass.Float32,
 ):
-    """Reverse one four-column value tile per CTA.
+    """Reverse one eight-column value tile per CTA.
 
     Splitting the value dimension is important for the relatively small-head
     chunk workload: B=1, H=16 otherwise exposes only 16 CTAs to an SM120 GPU.
-    The four K-shaped gradients are kept as FP32 tile partials and reduced by
-    a second kernel.  V-shaped gradients and dS do not require a reduction.
+    Each lane retains the former V4 ownership for two columns.  This preserves
+    the old reduction trees while K-side loads and gate evaluation are shared
+    across both V4 subtiles.  Final-form K-shaped gradients are kept as FP32
+    tile partials and summed by a second kernel.  V-shaped gradients and dS
+    need no reduction.
     """
 
     tidx, _, _ = cute.arch.thread_idx()
@@ -406,9 +411,10 @@ def _chunk_backward_value_tiled_kernel(
     batch = batch_head // q.shape[2]
     head = batch_head - batch * q.shape[2]
 
-    value_local = tidx & 3
+    value_lane = tidx & (_TILED_LANE_VALUES - 1)
     key_group = tidx >> 2
-    value_idx = value_tile * _TILED_V + value_local
+    value_idx_0 = value_tile * _TILED_V + value_lane
+    value_idx_1 = value_idx_0 + _TILED_LANE_VALUES
 
     # Only the tile-local state is needed.  Each lane owns disjoint state
     # cells, so state accesses need no inter-thread synchronization.
@@ -418,24 +424,31 @@ def _chunk_backward_value_tiled_kernel(
         cute.make_layout((_DIM, _TILED_V), stride=(_TILED_V, 1)),
         byte_alignment=16,
     )
-    # k, r=beta*k, exp(g), and reciprocal exp(g), shared by all four columns.
+    # k, r=beta*k, exp(g), reciprocal exp(g), and beta are shared by all eight
+    # columns.  Keeping beta lets this kernel emit final-form dk partials.
     key_data = smem.allocate_tensor(
         cutlass.Float32,
-        cute.make_layout((4, _DIM), stride=(_DIM, 1)),
+        cute.make_layout((_TILED_KEY_FIELDS, _DIM), stride=(_DIM, 1)),
         byte_alignment=16,
     )
-    dstate = cute.make_rmem_tensor(cute.make_layout((_TILED_KEYS_PER_LANE,)), cutlass.Float32)
+    dstate_0 = cute.make_rmem_tensor((_TILED_KEYS_PER_LANE,), cutlass.Float32)
+    dstate_1 = cute.make_rmem_tensor((_TILED_KEYS_PER_LANE,), cutlass.Float32)
     for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
         key_idx = key_group + 8 * key_iter
-        state[key_idx, value_local] = final_state[batch, head, key_idx, value_idx].to(
+        state[key_idx, value_lane] = final_state[batch, head, key_idx, value_idx_0].to(
             cutlass.Float32
         )
-        dstate[key_iter] = d_final_state[batch, head, key_idx, value_idx].to(cutlass.Float32)
+        state[key_idx, value_lane + _TILED_LANE_VALUES] = final_state[
+            batch, head, key_idx, value_idx_1
+        ].to(cutlass.Float32)
+        dstate_0[key_iter] = d_final_state[batch, head, key_idx, value_idx_0].to(cutlass.Float32)
+        dstate_1[key_iter] = d_final_state[batch, head, key_idx, value_idx_1].to(cutlass.Float32)
 
     time = q.shape[1]
     for reverse_iter in cutlass.range(time, unroll=1):
         token = time - 1 - reverse_iter
-        do_value = do[batch, token, head, value_idx].to(cutlass.Float32)
+        do_value_0 = do[batch, token, head, value_idx_0].to(cutlass.Float32)
+        do_value_1 = do[batch, token, head, value_idx_1].to(cutlass.Float32)
 
         # Evaluate the gate once per key and CTA, instead of once per state
         # cell.  Four coalesced rounds cover all 128 keys.
@@ -450,48 +463,68 @@ def _chunk_backward_value_tiled_kernel(
             key_data[1, cache_key] = beta_value * key_value
             key_data[2, cache_key] = decay
             key_data[3, cache_key] = cutlass.Float32(1.0) / decay
+            key_data[4, cache_key] = beta_value
         cute.arch.sync_warp()
 
-        # Output VJP and this value tile's FP32 dq partial.
+        # Output VJP and this V8 tile's FP32 dq partial.  Each half retains the
+        # old V4 reduction tree before lane zero combines them in value order.
         for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
             key_idx = key_group + 8 * key_iter
             q_value = q[batch, token, head, key_idx].to(cutlass.Float32)
-            state_value = state[key_idx, value_local]
-            dstate[key_iter] = dstate[key_iter] + scale * q_value * do_value
+            state_value_0 = state[key_idx, value_lane]
+            state_value_1 = state[key_idx, value_lane + _TILED_LANE_VALUES]
+            dstate_0[key_iter] += scale * q_value * do_value_0
+            dstate_1[key_iter] += scale * q_value * do_value_1
 
-            dq_part = _four_lane_sum(scale * state_value * do_value)
-            if value_local == 0:
-                partial[0, batch, token, head, value_tile, key_idx] = dq_part
+            dq_part_0 = _four_lane_sum(scale * state_value_0 * do_value_0)
+            dq_part_1 = _four_lane_sum(scale * state_value_1 * do_value_1)
+            if value_lane == 0:
+                partial[batch, token, head, value_tile, key_idx, 0] = dq_part_0 + dq_part_1
 
         denominator_part = cutlass.Float32(0.0)
-        y_dot_part = cutlass.Float32(0.0)
-        z_value = w[batch, token, head, value_idx].to(cutlass.Float32) * v[
-            batch, token, head, value_idx
+        y_dot_part_0 = cutlass.Float32(0.0)
+        y_dot_part_1 = cutlass.Float32(0.0)
+        z_value_0 = w[batch, token, head, value_idx_0].to(cutlass.Float32) * v[
+            batch, token, head, value_idx_0
+        ].to(cutlass.Float32)
+        z_value_1 = w[batch, token, head, value_idx_1].to(cutlass.Float32) * v[
+            batch, token, head, value_idx_1
         ].to(cutlass.Float32)
         for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
             key_idx = key_group + 8 * key_iter
             key_value = key_data[0, key_idx]
             r_value = key_data[1, key_idx]
-            y_value = state[key_idx, value_local] - key_value * z_value
-            denominator_part = denominator_part + r_value * key_value
-            y_dot_part = y_dot_part + r_value * y_value
+            y_value_0 = state[key_idx, value_lane] - key_value * z_value_0
+            y_value_1 = state[key_idx, value_lane + _TILED_LANE_VALUES] - key_value * z_value_1
+            denominator_part += r_value * key_value
+            y_dot_part_0 += r_value * y_value_0
+            y_dot_part_1 += r_value * y_value_1
 
         denominator = cutlass.Float32(1.0) - _oct_sum(denominator_part)
-        erased_value = _oct_sum(y_dot_part) / denominator
-        update_value = z_value - erased_value
+        erased_value_0 = _oct_sum(y_dot_part_0) / denominator
+        erased_value_1 = _oct_sum(y_dot_part_1) / denominator
+        update_value_0 = z_value_0 - erased_value_0
+        update_value_1 = z_value_1 - erased_value_1
 
-        du_part = cutlass.Float32(0.0)
+        du_part_0 = cutlass.Float32(0.0)
+        du_part_1 = cutlass.Float32(0.0)
         for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
             key_idx = key_group + 8 * key_iter
             key_value = key_data[0, key_idx]
-            du_part = du_part + key_value * dstate[key_iter]
-        du_value = _oct_sum(du_part)
+            du_part_0 += key_value * dstate_0[key_iter]
+            du_part_1 += key_value * dstate_1[key_iter]
+        du_value_0 = _oct_sum(du_part_0)
+        du_value_1 = _oct_sum(du_part_1)
 
         if key_group == 0:
-            v_value = v[batch, token, head, value_idx].to(cutlass.Float32)
-            w_value = w[batch, token, head, value_idx].to(cutlass.Float32)
-            dv[batch, token, head, value_idx] = (du_value * w_value).to(dv.element_type)
-            dw[batch, token, head, value_idx] = (du_value * v_value).to(dw.element_type)
+            v_value_0 = v[batch, token, head, value_idx_0].to(cutlass.Float32)
+            w_value_0 = w[batch, token, head, value_idx_0].to(cutlass.Float32)
+            v_value_1 = v[batch, token, head, value_idx_1].to(cutlass.Float32)
+            w_value_1 = w[batch, token, head, value_idx_1].to(cutlass.Float32)
+            dv[batch, token, head, value_idx_0] = (du_value_0 * w_value_0).to(dv.element_type)
+            dw[batch, token, head, value_idx_0] = (du_value_0 * v_value_0).to(dw.element_type)
+            dv[batch, token, head, value_idx_1] = (du_value_1 * w_value_1).to(dv.element_type)
+            dw[batch, token, head, value_idx_1] = (du_value_1 * v_value_1).to(dw.element_type)
 
         for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
             key_idx = key_group + 8 * key_iter
@@ -499,35 +532,50 @@ def _chunk_backward_value_tiled_kernel(
             r_value = key_data[1, key_idx]
             decay = key_data[2, key_idx]
             inverse_decay = key_data[3, key_idx]
-            current_state = state[key_idx, value_local]
-            y_value = current_state - key_value * z_value
-            x_value = y_value + key_value * erased_value
-            previous_state = x_value * inverse_decay
-            state[key_idx, value_local] = previous_state
-            ds_value = dstate[key_iter]
+            beta_value = key_data[4, key_idx]
+            current_state_0 = state[key_idx, value_lane]
+            current_state_1 = state[key_idx, value_lane + _TILED_LANE_VALUES]
+            y_value_0 = current_state_0 - key_value * z_value_0
+            y_value_1 = current_state_1 - key_value * z_value_1
+            x_value_0 = y_value_0 + key_value * erased_value_0
+            x_value_1 = y_value_1 + key_value * erased_value_1
+            previous_state_0 = x_value_0 * inverse_decay
+            previous_state_1 = x_value_1 * inverse_decay
+            state[key_idx, value_lane] = previous_state_0
+            state[key_idx, value_lane + _TILED_LANE_VALUES] = previous_state_1
+            ds_value_0 = dstate_0[key_iter]
+            ds_value_1 = dstate_1[key_iter]
 
-            dk_direct_part = _four_lane_sum(ds_value * update_value)
-            dr_part = _four_lane_sum(-x_value * du_value)
-            dx_value = ds_value - r_value * du_value
-            da_part = _four_lane_sum(dx_value * previous_state)
+            dk_direct_part_0 = _four_lane_sum(ds_value_0 * update_value_0)
+            dk_direct_part_1 = _four_lane_sum(ds_value_1 * update_value_1)
+            dr_part_0 = _four_lane_sum(-x_value_0 * du_value_0)
+            dr_part_1 = _four_lane_sum(-x_value_1 * du_value_1)
+            dx_value_0 = ds_value_0 - r_value * du_value_0
+            dx_value_1 = ds_value_1 - r_value * du_value_1
+            da_part_0 = _four_lane_sum(dx_value_0 * previous_state_0)
+            da_part_1 = _four_lane_sum(dx_value_1 * previous_state_1)
 
-            if value_local == 0:
-                partial[1, batch, token, head, value_tile, key_idx] = dk_direct_part
-                partial[2, batch, token, head, value_tile, key_idx] = dr_part
-                partial[3, batch, token, head, value_tile, key_idx] = da_part
+            if value_lane == 0:
+                dk_direct_part = dk_direct_part_0 + dk_direct_part_1
+                dr_part = dr_part_0 + dr_part_1
+                da_part = da_part_0 + da_part_1
+                partial[batch, token, head, value_tile, key_idx, 1] = (
+                    dk_direct_part + beta_value * dr_part
+                )
+                partial[batch, token, head, value_tile, key_idx, 2] = decay * da_part
+                partial[batch, token, head, value_tile, key_idx, 3] = key_value * dr_part
 
-            dstate[key_iter] = decay * dx_value
+            dstate_0[key_iter] = decay * dx_value_0
+            dstate_1[key_iter] = decay * dx_value_1
 
     for key_iter in cutlass.range(_TILED_KEYS_PER_LANE, unroll_full=True):
         key_idx = key_group + 8 * key_iter
-        d_initial_state[batch, head, key_idx, value_idx] = dstate[key_iter]
+        d_initial_state[batch, head, key_idx, value_idx_0] = dstate_0[key_iter]
+        d_initial_state[batch, head, key_idx, value_idx_1] = dstate_1[key_iter]
 
 
 @cute.kernel
 def _reduce_value_tile_partials_kernel(
-    k: cute.Tensor,
-    g: cute.Tensor,
-    beta: cute.Tensor,
     partial: cute.Tensor,
     dq: cute.Tensor,
     dk: cute.Tensor,
@@ -537,29 +585,26 @@ def _reduce_value_tile_partials_kernel(
     tidx, _, _ = cute.arch.thread_idx()
     block, _, _ = cute.arch.block_idx()
 
-    head = block % k.shape[2]
-    batch_token = block // k.shape[2]
-    token = batch_token % k.shape[1]
-    batch = batch_token // k.shape[1]
+    head = block % dq.shape[2]
+    batch_token = block // dq.shape[2]
+    token = batch_token % dq.shape[1]
+    batch = batch_token // dq.shape[1]
     key_idx = tidx
 
     dq_total = cutlass.Float32(0.0)
-    dk_direct_total = cutlass.Float32(0.0)
-    dr_total = cutlass.Float32(0.0)
-    da_total = cutlass.Float32(0.0)
+    dk_total = cutlass.Float32(0.0)
+    dg_total = cutlass.Float32(0.0)
+    dbeta_total = cutlass.Float32(0.0)
     for value_tile in cutlass.range_constexpr(_VALUE_TILES):
-        dq_total = dq_total + partial[0, batch, token, head, value_tile, key_idx]
-        dk_direct_total = dk_direct_total + partial[1, batch, token, head, value_tile, key_idx]
-        dr_total = dr_total + partial[2, batch, token, head, value_tile, key_idx]
-        da_total = da_total + partial[3, batch, token, head, value_tile, key_idx]
+        dq_total += partial[batch, token, head, value_tile, key_idx, 0]
+        dk_total += partial[batch, token, head, value_tile, key_idx, 1]
+        dg_total += partial[batch, token, head, value_tile, key_idx, 2]
+        dbeta_total += partial[batch, token, head, value_tile, key_idx, 3]
 
-    key_value = k[batch, token, head, key_idx].to(cutlass.Float32)
-    beta_value = beta[batch, token, head, key_idx].to(cutlass.Float32)
-    decay = cute.math.exp(g[batch, token, head, key_idx].to(cutlass.Float32), fastmath=False)
     dq[batch, token, head, key_idx] = dq_total.to(dq.element_type)
-    dk[batch, token, head, key_idx] = (dk_direct_total + beta_value * dr_total).to(dk.element_type)
-    dbeta[batch, token, head, key_idx] = (key_value * dr_total).to(dbeta.element_type)
-    dg[batch, token, head, key_idx] = (decay * da_total).to(dg.element_type)
+    dk[batch, token, head, key_idx] = dk_total.to(dk.element_type)
+    dg[batch, token, head, key_idx] = dg_total.to(dg.element_type)
+    dbeta[batch, token, head, key_idx] = dbeta_total.to(dbeta.element_type)
 
 
 @cute.kernel
@@ -832,9 +877,6 @@ def _launch_chunk_backward_value_tiled(
         stream=stream,
     )
     _reduce_value_tile_partials_kernel(
-        k,
-        g,
-        beta,
         partial,
         dq,
         dk,
@@ -1091,7 +1133,7 @@ def _chunk_backward_impl(
     # the original single-CTA/head path for latency-sensitive recurrent use.
     if q.shape[1] > 1:
         partial = torch.empty(
-            (4, q.shape[0], q.shape[1], q.shape[2], _VALUE_TILES, _DIM),
+            (q.shape[0], q.shape[1], q.shape[2], _VALUE_TILES, _DIM, 4),
             device=q.device,
             dtype=torch.float32,
         )

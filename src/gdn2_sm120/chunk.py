@@ -11,8 +11,9 @@ WY algorithm:
    in registers, selected to balance grid coverage against duplicated scan
    traffic, while ``m16n8k16`` tensor-core operations evaluate all dense
    products; a deterministic shared-memory reduction combines the K partials;
-3. sequences with a partial final chunk retain a scalar warp-reduction scan so
-   arbitrary positive lengths preserve the same API and numerical semantics.
+3. sequences with a partial final chunk keep the full prefix on the tensor-core
+   scan and run only the final short chunk through the scalar warp-reduction
+   scan, avoiding a sequence-wide performance cliff.
 """
 
 from __future__ import annotations
@@ -86,6 +87,17 @@ def _state_boundary_storage_bytes(
     return batch * (n_chunks + 1) * heads * _KEY_DIM * _VALUE_DIM * element_size
 
 
+def _byte_span(tensor) -> tuple[int, int]:
+    """Return the half-open byte range occupied by a contiguous tensor."""
+
+    start = tensor.data_ptr()
+    return start, start + tensor.nbytes
+
+
+def _spans_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < left[1] and right[0] < right[1] and left[0] < right[1] and right[0] < left[1]
+
+
 @cute.jit
 def _warp_sum(value: cutlass.Float32) -> cutlass.Float32:
     value += cute.arch.shuffle_sync_bfly(value, 16)
@@ -121,6 +133,7 @@ def _prepare_wy_kernel(
     value_dim: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
     store_forward_aux: cutlass.Constexpr,
+    store_partial_tail_original: cutlass.Constexpr,
 ):
     tidx, _, _ = cute.arch.thread_idx()
     block, _, _ = cute.arch.block_idx()
@@ -178,6 +191,11 @@ def _prepare_wy_kernel(
                     q_gamma_out[batch, token, head, key_idx] = s_q_gamma[token_local, key_idx].to(
                         q_gamma_out.element_type
                     )
+                elif cutlass.const_expr(store_partial_tail_original):  # noqa: SIM102
+                    if chunk == n_chunks - 1:
+                        q_gamma_out[batch, token, head, key_idx] = s_q_gamma[
+                            token_local, key_idx
+                        ].to(q_gamma_out.element_type)
                 k_tail_out[batch, token, head, key_idx] = (
                     gamma_end * s_k_bar[token_local, key_idx]
                 ).to(k_tail_out.element_type)
@@ -206,6 +224,9 @@ def _prepare_wy_kernel(
             # AQK remains part of the public training checkpoint contract.
             if cutlass.const_expr(not use_algebra or store_forward_aux):
                 aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
+            elif cutlass.const_expr(store_partial_tail_original):  # noqa: SIM102
+                if chunk == n_chunks - 1:
+                    aqk_out[batch, chunk, head, row, col] = causal.to(aqk_out.element_type)
 
     cute.arch.sync_threads()
 
@@ -274,7 +295,8 @@ def _inter_chunk_kernel(
     final_state: cute.Tensor,
     state_boundaries: cute.Tensor,
     time: cutlass.Constexpr,
-    n_chunks: cutlass.Constexpr,
+    first_chunk: cutlass.Constexpr,
+    scan_chunks: cutlass.Constexpr,
     heads: cutlass.Constexpr,
     has_initial_state: cutlass.Constexpr,
     store_state_boundaries: cutlass.Constexpr,
@@ -307,12 +329,13 @@ def _inter_chunk_kernel(
                 state_value = initial_state[batch, head, key_idx, value_idx].to(cutlass.Float32)
             state[key_group] = state_value
 
-        if cutlass.const_expr(store_state_boundaries):
+        if cutlass.const_expr(store_state_boundaries and first_chunk == 0):
             for key_group in cutlass.range_constexpr(key_dim // 32):
                 key_idx = lane + key_group * 32
                 state_boundaries[batch, 0, head, key_idx, value_idx] = state[key_group]
 
-        for chunk in range(0, n_chunks, 1):
+        for scan_chunk in range(0, scan_chunks, 1):
+            chunk = first_chunk + scan_chunk
             start = chunk * chunk_size
             length = cutlass.min(chunk_size, time - start)
 
@@ -804,12 +827,14 @@ def _launch_chunk_forward(
         _VALUE_DIM,
         use_algebra,
         store_forward_aux,
+        time % _CHUNK_SIZE != 0,
     ).launch(
         grid=(batch * n_chunks * heads, 1, 1),
         block=(_PREPARE_THREADS, 1, 1),
         stream=stream,
     )
-    if cutlass.const_expr(n_chunks < _K_SPLIT_MIN_CHUNKS or time % _CHUNK_SIZE != 0):
+    full_chunks = time // _CHUNK_SIZE
+    if cutlass.const_expr(full_chunks < _K_SPLIT_MIN_CHUNKS):
         _inter_chunk_kernel(
             y,
             u,
@@ -822,6 +847,7 @@ def _launch_chunk_forward(
             final_state,
             state_boundaries,
             time,
+            0,
             n_chunks,
             heads,
             has_initial_state,
@@ -872,7 +898,7 @@ def _launch_chunk_forward(
             final_state,
             state_boundaries,
             time,
-            n_chunks,
+            full_chunks,
             heads,
             has_initial_state,
             store_state_boundaries,
@@ -889,16 +915,48 @@ def _launch_chunk_forward(
             block=(_K_SPLIT_THREADS, 1, 1),
             stream=stream,
         )
+        if cutlass.const_expr(time % _CHUNK_SIZE != 0):
+            # The MMA launch above materializes the prefix state in
+            # ``final_state``.  Stream ordering makes it a safe in-place input
+            # to the one-chunk scalar tail, while saved boundaries retain their
+            # global chunk indices.
+            _inter_chunk_kernel(
+                y,
+                u,
+                q_gamma,
+                k_tail,
+                decay_end,
+                aqk,
+                final_state,
+                output,
+                final_state,
+                state_boundaries,
+                time,
+                full_chunks,
+                1,
+                heads,
+                True,
+                store_state_boundaries,
+                _CHUNK_SIZE,
+                _KEY_DIM,
+                _VALUE_DIM,
+                _VALUE_TILE,
+                _COLS_PER_WARP,
+            ).launch(
+                grid=(batch * heads * (_VALUE_DIM // _VALUE_TILE), 1, 1),
+                block=(_INTER_THREADS, 1, 1),
+                stream=stream,
+            )
 
 
 @dataclass(frozen=True)
 class ChunkForwardAux:
     """WY tensors and state boundaries consumed by checkpointed backward.
 
-    Full chunks at T>=128 checkpoint Y/Q-gamma/K-tail/A-qk in the input dtype
-    and keep U/decay in FP32.  BF16 also uses compact BF16 state checkpoints;
-    FP16, short, and partial-tail specializations keep state boundaries in
-    FP32.
+    Calls at T>=128 checkpoint Y/Q-gamma/K-tail/A-qk in the input dtype and
+    keep U/decay in FP32, including sequences with a partial tail.  Full-chunk
+    BF16 calls also use compact BF16 state checkpoints; FP16, short, and
+    partial-tail specializations keep state boundaries in FP32.
     """
 
     y: object
@@ -1001,6 +1059,8 @@ def chunk_forward(
     *,
     scale: float | None = None,
     return_aux: bool = False,
+    out=None,
+    final_state_out=None,
 ):
     """Run the SM120 BT=16 chunkwise forward kernel.
 
@@ -1061,9 +1121,9 @@ def chunk_forward(
 
     n_chunks = math.ceil(time / _CHUNK_SIZE)
     full_chunks = time % _CHUNK_SIZE == 0
-    compact_aux = not return_aux and n_chunks >= _K_SPLIT_MIN_CHUNKS and full_chunks
-    compact_backward_aux = return_aux and time >= 128 and full_chunks
-    compact_state_boundaries = compact_backward_aux and q.dtype == torch.bfloat16
+    compact_aux = not return_aux and time // _CHUNK_SIZE >= _K_SPLIT_MIN_CHUNKS
+    compact_backward_aux = return_aux and time >= 128
+    compact_state_boundaries = compact_backward_aux and full_chunks and q.dtype == torch.bfloat16
     if return_aux:
         boundary_element_size = q.element_size() if compact_state_boundaries else 4
         boundary_bytes = _state_boundary_storage_bytes(
@@ -1079,12 +1139,64 @@ def chunk_forward(
             )
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.
-    use_algebra = q.dtype == torch.bfloat16 and full_chunks and n_chunks >= _ALGEBRA_MIN_CHUNKS
+    use_algebra = q.dtype == torch.bfloat16 and time // _CHUNK_SIZE >= _ALGEBRA_MIN_CHUNKS
     store_forward_aux = return_aux
     aux_dtype = q.dtype if compact_aux or compact_backward_aux else torch.float32
     u_dtype = torch.float32 if compact_backward_aux else aux_dtype
-    output = torch.empty_like(v)
-    final_state = torch.empty(expected_state_shape, device=q.device, dtype=torch.float32)
+    if return_aux and (out is not None or final_state_out is not None):
+        raise ValueError("preallocated outputs are supported only when return_aux=False")
+    if out is None:
+        output = torch.empty_like(v)
+    else:
+        if not isinstance(out, torch.Tensor):
+            raise TypeError("out must be a torch.Tensor or None")
+        if out.shape != v.shape or out.dtype != v.dtype:
+            raise ValueError("out must match the contiguous input value layout")
+        if out.device != q.device or not out.is_cuda or not out.is_contiguous():
+            raise ValueError("out must be a contiguous CUDA tensor on q's device")
+        if out.data_ptr() % 16 != 0:
+            raise ValueError("out must be 16-byte aligned for the chunk path")
+        output = out
+    if final_state_out is None:
+        final_state = torch.empty(expected_state_shape, device=q.device, dtype=torch.float32)
+    else:
+        if not isinstance(final_state_out, torch.Tensor):
+            raise TypeError("final_state_out must be a torch.Tensor or None")
+        if final_state_out.shape != expected_state_shape or final_state_out.dtype != torch.float32:
+            raise ValueError("final_state_out must be contiguous float32 [B, H, 128, 128]")
+        if (
+            final_state_out.device != q.device
+            or not final_state_out.is_cuda
+            or not final_state_out.is_contiguous()
+        ):
+            raise ValueError("final_state_out must be a contiguous CUDA tensor on q's device")
+        if final_state_out.data_ptr() % 16 != 0:
+            raise ValueError("final_state_out must be 16-byte aligned for the chunk path")
+        final_state = final_state_out
+    if out is not None or final_state_out is not None:
+        sequence_spans = tuple(_byte_span(tensor) for tensor in tensors)
+        initial_span = _byte_span(initial_state) if initial_state is not None else None
+        output_span = _byte_span(output)
+        final_span = _byte_span(final_state)
+        if out is not None:
+            if any(_spans_overlap(output_span, span) for span in sequence_spans) or (
+                initial_span is not None and _spans_overlap(output_span, initial_span)
+            ):
+                raise ValueError("out must not overlap an input tensor")
+            if _spans_overlap(output_span, final_span):
+                raise ValueError("out and final_state_out must not overlap")
+        if final_state_out is not None:
+            if any(_spans_overlap(final_span, span) for span in sequence_spans):
+                raise ValueError("final_state_out must not overlap a sequence input")
+            if (
+                initial_span is not None
+                and final_span != initial_span
+                and _spans_overlap(final_span, initial_span)
+            ):
+                raise ValueError(
+                    "final_state_out may exactly alias initial_state but must not "
+                    "partially overlap it"
+                )
     # Long training keeps U in FP32 so residual subtraction preserves its
     # rounding order, while tensors immediately narrowed by backward MMA are
     # checkpointed in the input dtype to halve persistent traffic.
@@ -1094,7 +1206,7 @@ def chunk_forward(
     # Inference reuses its private Q-gamma allocation.  Long BF16 training
     # keeps raw Q-gamma public and gives the scan a separate compact scratch.
     q_effective = q_gamma
-    if use_algebra and store_forward_aux:
+    if use_algebra and (store_forward_aux or not full_chunks):
         q_effective = torch.empty(q.shape, device=q.device, dtype=q.dtype)
     k_tail = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     decay_end = torch.empty((batch, n_chunks, heads, key_dim), device=q.device, dtype=torch.float32)

@@ -467,7 +467,7 @@ def test_cute_wide_mma_boundary_scan_matches_reference(
 @pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
 def test_partial_tail_requires_grad_and_uses_current_stream() -> None:
-    """T=129 covers scalar boundary fallback and independent final chunk."""
+    """T=129 covers scalar-tail plus MMA-prefix reverse scan ordering."""
 
     generator = torch.Generator(device="cuda").manual_seed(129_129)
     batch, time, heads, dim = 1, 129, 1, 128
@@ -528,7 +528,7 @@ def test_partial_tail_requires_grad_and_uses_current_stream() -> None:
         )
     stream.synchronize()
 
-    torch.testing.assert_close(dstate_boundaries, dstate_reference, atol=2e-5, rtol=2e-4)
+    torch.testing.assert_close(dstate_boundaries, dstate_reference, atol=4e-4, rtol=2e-3)
     for gradient, reference in zip(actual[:-1], expected[:-1], strict=True):
         torch.testing.assert_close(gradient, reference, atol=1.5e-2, rtol=2e-2)
-    torch.testing.assert_close(actual[-1], expected[-1], atol=3e-5, rtol=3e-4)
+    torch.testing.assert_close(actual[-1], expected[-1], atol=1e-4, rtol=2e-3)

@@ -13,6 +13,65 @@ def _sm120_available() -> bool:
 
 
 @pytest.mark.parametrize(
+    ("batch", "time", "heads", "chunk_api", "expected"),
+    [
+        (1, 32, 16, False, True),
+        (1, 48, 16, False, True),
+        (4, 48, 16, False, True),
+        (1, 64, 16, False, False),
+        (1, 40, 16, True, True),
+        (1, 48, 16, True, False),
+        (4, 48, 16, True, False),
+        (1, 56, 16, True, False),
+        (4, 56, 16, True, True),
+        (1, 64, 16, True, False),
+    ],
+)
+def test_forward_kernel_crossover_dispatch(
+    batch: int,
+    time: int,
+    heads: int,
+    chunk_api: bool,
+    expected: bool,
+) -> None:
+    assert ops_module._use_recurrent_kernel(batch, time, heads, chunk_api=chunk_api) is expected
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
+def test_chunk_gdn2_empty_sequence_preserves_autograd_state_edge() -> None:
+    shape = (1, 0, 1, 128)
+    inputs = [
+        torch.empty(
+            shape,
+            device="cuda",
+            dtype=torch.float32 if index == 3 else torch.bfloat16,
+            requires_grad=True,
+        )
+        for index in range(6)
+    ]
+    initial_state = torch.randn(
+        (1, 1, 128, 128), device="cuda", dtype=torch.float32, requires_grad=True
+    )
+
+    output, final_state = chunk_gdn2(
+        *inputs,
+        initial_state,
+        output_final_state=True,
+    )
+
+    assert output.shape == shape
+    assert final_state is not None
+    torch.testing.assert_close(final_state, initial_state, atol=0, rtol=0)
+    gradients = torch.autograd.grad(
+        output.float().sum() + final_state.sum(),
+        (*inputs, initial_state),
+    )
+    assert all(gradient.shape == shape and gradient.numel() == 0 for gradient in gradients[:-1])
+    torch.testing.assert_close(gradients[-1], torch.ones_like(initial_state), atol=0, rtol=0)
+
+
+@pytest.mark.parametrize(
     ("batch", "time", "heads", "expected"),
     [
         (1, 63, 64, False),
@@ -181,9 +240,14 @@ def test_chunk_gdn2_autograd_matches_reference() -> None:
 @pytest.mark.cuda
 @pytest.mark.slow
 @pytest.mark.skipif(not _sm120_available(), reason="requires an SM120 CUDA GPU")
-def test_chunk_gdn2_parallel_backward_handles_partial_tail() -> None:
-    generator = torch.Generator(device="cuda").manual_seed(2605_129)
-    shape = (1, 129, 1, 128)
+@pytest.mark.parametrize(
+    "time",
+    [129, 143, 513],
+    ids=["one-token-tail", "masked-tail", "algebra-prefix"],
+)
+def test_chunk_gdn2_parallel_backward_handles_partial_tail(time: int) -> None:
+    generator = torch.Generator(device="cuda").manual_seed(2_605_000 + time)
+    shape = (1, time, 1, 128)
     state_shape = (1, 1, 128, 128)
     dtype = torch.bfloat16
     scale = 0.125

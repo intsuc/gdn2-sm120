@@ -3,12 +3,27 @@ from __future__ import annotations
 import pytest
 import torch
 
+import gdn2_sm120.backward as backward_module
 from gdn2_sm120.backward import chunk_backward
 from gdn2_sm120.reference import chunkwise_forward_reference
 
 
 def _sm120_available() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() == (12, 0)
+
+
+def test_value_tiled_backward_uses_v8_and_half_sized_gradient_partials() -> None:
+    batch, time, heads, dim = 1, 16, 16, 128
+    old_v4_bytes = 4 * batch * time * heads * (dim // 4) * dim * 4
+    new_shape = (batch, time, heads, backward_module._VALUE_TILES, dim, 4)
+    new_bytes = 4
+    for extent in new_shape:
+        new_bytes *= extent
+
+    assert backward_module._TILED_V == 8
+    assert backward_module._VALUE_TILES == 16
+    assert backward_module._TILED_KEYS_PER_LANE == 16
+    assert new_bytes == old_v4_bytes // 2
 
 
 def test_backward_rejects_non_128_dimensions_before_launch() -> None:

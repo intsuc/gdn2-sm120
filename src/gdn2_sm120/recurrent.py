@@ -36,6 +36,9 @@ _VALUE_TILE = 32
 _VALUE_TILES = _DIM // _VALUE_TILE
 _COLS_PER_WARP = _VALUE_TILE // _WARPS
 _COL_GROUP = 8
+_SHORT_RECURRENT_MAX_TOKENS = 32
+_CHUNK_ALWAYS_MIN_TOKENS = 64
+_MIDRANGE_RECURRENT_MIN_BATCH_HEADS = 32
 
 # Calling a decorated JIT function retraces enough Python to dominate a small
 # recurrent launch.  Keep explicit compiled executors instead.  T is dynamic in
@@ -45,6 +48,44 @@ _COMPILED_LAUNCHERS: dict[
 ] = {}
 _COMPILED_T1_ZERO_LAUNCHERS: dict[tuple[torch.device, torch.dtype, int, int, bool], object] = {}
 _COMPILE_LOCK = threading.Lock()
+
+
+def _use_recurrent_kernel(
+    batch: int,
+    time: int,
+    heads: int,
+    *,
+    chunk_api: bool = False,
+) -> bool:
+    """Select the measured crossover, including each API's wrapper overhead."""
+
+    if time <= _SHORT_RECURRENT_MAX_TOKENS:
+        return True
+    if time >= _CHUNK_ALWAYS_MIN_TOKENS:
+        return False
+    if not chunk_api:
+        # recurrent_gdn2 performs token-style buffer/alias validation before it
+        # can enter the chunk path.  Below 64 tokens that fixed overhead erases
+        # the raw-kernel crossover advantage.
+        return True
+    if time < 48:
+        # The chunk API has less fixed validation overhead, but its prepare and
+        # scan launches still lose to the recurrent kernel below 48 tokens.
+        return True
+    if time == 48:
+        # Three complete chunks amortize the launch sequence across every
+        # measured batch/head grid; the custom autograd wrapper's fixed cost
+        # otherwise hides the token kernel's raw-latency advantage.
+        return False
+    # At 49--63 tokens a small batch/head grid benefits from chunking, including
+    # a scalar tail launch.  Larger grids keep the recurrent kernel saturated.
+    return batch * heads >= _MIDRANGE_RECURRENT_MIN_BATCH_HEADS
+
+
+def _chunk_forward_compatible(tensors: Sequence[torch.Tensor]) -> bool:
+    """Return whether every runtime buffer satisfies the chunk path alignment."""
+
+    return all(tensor.data_ptr() % 16 == 0 for tensor in tensors)
 
 
 @cache
@@ -755,6 +796,26 @@ def token_forward(
     # final_state is a safe dummy input when the recurrence starts from zero;
     # the compile-time flag removes the uninitialized read from the kernel.
     state_input = final_state if initial_state is None else initial_state
+    if not _use_recurrent_kernel(batch, time, heads) and _chunk_forward_compatible(
+        (*inputs, state_input, output, final_state)
+    ):
+        # Import lazily to keep the two low-level kernel modules independently
+        # usable and to avoid paying chunk compilation/import work for decode.
+        from .chunk import chunk_forward
+
+        return chunk_forward(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            w,
+            initial_state,
+            scale=output_scale,
+            out=output,
+            final_state_out=final_state,
+        )
+
     use_t1_zero = time == 1 and initial_state is None
 
     if _cuda_device_count() == 1:

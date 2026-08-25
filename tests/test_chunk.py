@@ -99,8 +99,9 @@ def test_chunk_forward_matches_wy_reference(time: int) -> None:
     torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
     # The tensor-core path converts the persistent FP32 state to the input
     # dtype for each MMA, matching the official kernel's accumulation model.
-    state_atol = 8e-4 if time % 16 == 0 else 2e-4
-    state_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    uses_mma_scan = time >= 16
+    state_atol = 8e-4 if uses_mma_scan else 2e-4
+    state_rtol = 3e-2 if uses_mma_scan else 2e-3
     torch.testing.assert_close(final_state, expected_state, atol=state_atol, rtol=state_rtol)
 
 
@@ -162,6 +163,32 @@ def test_chunk_forward_rejects_incompatible_dsl_arch(monkeypatch) -> None:
 
 
 @pytest.mark.cuda
+def test_chunk_forward_rejects_preallocated_output_overlap() -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    args = _inputs(16)
+
+    with pytest.raises(ValueError, match="out must not overlap"):
+        chunk_forward(*args[:6], args[6], out=args[0])
+
+
+@pytest.mark.cuda
+def test_chunk_forward_rejects_shifted_state_output_overlap() -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    args = _inputs(16)
+    state_shape = args[6].shape
+    state_elements = args[6].numel()
+    backing = torch.empty(state_elements + 4, device="cuda", dtype=torch.float32)
+    initial_state = backing[:state_elements].view(state_shape)
+    shifted_output = backing[4:].view(state_shape)
+    initial_state.copy_(args[6])
+
+    with pytest.raises(ValueError, match="must not partially overlap"):
+        chunk_forward(*args[:6], initial_state, final_state_out=shifted_output)
+
+
+@pytest.mark.cuda
 def test_chunk_forward_fp16_normalized_qk_batch_two() -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
@@ -205,8 +232,9 @@ def test_chunk_forward_compact_dispatch_boundaries(time: int, dtype: torch.dtype
     torch.cuda.synchronize()
 
     torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
-    state_atol = 1.5e-3 if time % 16 == 0 else 2e-4
-    state_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    uses_mma_scan = time >= 16
+    state_atol = 1.5e-3 if uses_mma_scan else 2e-4
+    state_rtol = 3e-2 if uses_mma_scan else 2e-3
     torch.testing.assert_close(final_state, expected_state, atol=state_atol, rtol=state_rtol)
 
 
@@ -249,8 +277,9 @@ def test_chunk_forward_uses_current_stream(time: int) -> None:
     stream.synchronize()
 
     torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
-    state_atol = 8e-4 if time % 16 == 0 else 2e-4
-    state_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    uses_mma_scan = time >= 16
+    state_atol = 8e-4 if uses_mma_scan else 2e-4
+    state_rtol = 3e-2 if uses_mma_scan else 2e-3
     torch.testing.assert_close(final_state, expected_state, atol=state_atol, rtol=state_rtol)
 
 
@@ -280,7 +309,13 @@ def test_chunk_forward_long_k_split_uses_current_stream(time: int, dtype: torch.
 @pytest.mark.cuda
 @pytest.mark.parametrize(
     ("time", "dtype"),
-    [(19, torch.bfloat16), (32, torch.bfloat16), (1024, torch.bfloat16), (128, torch.float16)],
+    [
+        (19, torch.bfloat16),
+        (32, torch.bfloat16),
+        (129, torch.bfloat16),
+        (1024, torch.bfloat16),
+        (128, torch.float16),
+    ],
 )
 def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
     time: int, dtype: torch.dtype
@@ -298,7 +333,7 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
         else torch.float32
     )
     assert aux.state_boundaries.dtype == expected_boundary_dtype
-    expected_wy_dtype = args[0].dtype if time >= 128 and time % 16 == 0 else torch.float32
+    expected_wy_dtype = args[0].dtype if time >= 128 else torch.float32
     assert all(
         tensor.dtype == expected_wy_dtype
         for tensor in (
@@ -321,8 +356,9 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
         *args[:6], args[6], scale=0.125, chunk_size=16
     )
     torch.testing.assert_close(output, expected_output, atol=3e-2, rtol=3e-2)
-    final_atol = 1.5e-3 if time >= 512 else 1e-3 if time % 16 == 0 else 2e-4
-    final_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    uses_mma_scan = time >= 16
+    final_atol = 1.5e-3 if time >= 512 else 1e-3 if uses_mma_scan else 2e-4
+    final_rtol = 3e-2 if uses_mma_scan else 2e-3
     torch.testing.assert_close(
         final_state,
         expected_final_state,
@@ -342,8 +378,8 @@ def test_chunk_forward_aux_uses_training_checkpoint_dtype_contract(
         )
         expected_boundaries.append(running_state)
     expected = torch.stack(expected_boundaries, dim=1)
-    boundary_atol = 1e-3 if time % 16 == 0 else 2e-4
-    boundary_rtol = 3e-2 if time % 16 == 0 else 2e-3
+    boundary_atol = 1e-3 if uses_mma_scan else 2e-4
+    boundary_rtol = 3e-2 if uses_mma_scan else 2e-3
     torch.testing.assert_close(
         aux.state_boundaries.float(),
         expected,
