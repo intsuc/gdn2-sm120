@@ -17,6 +17,10 @@ _CHUNK_SIZE = 16
 _PARALLEL_BACKWARD_MIN_TOKENS = 64
 _COMPACT_WY_BACKWARD_MIN_TOKENS = 128
 _T64_COMPACT_WY_MIN_CHUNK_HEADS = 64
+# CuTe's generated compact tensor layouts use a 32-bit byte offset.  Keep
+# every saved forward/reverse state-boundary tensor at or below that address
+# space so a large leading batch cannot wrap an otherwise valid access.
+_CUTE_TENSOR_BYTE_ADDRESS_LIMIT = 1 << 32
 
 
 def _use_compact_wy_backward(batch: int, time: int, heads: int) -> bool:
@@ -26,6 +30,44 @@ def _use_compact_wy_backward(batch: int, time: int, heads: int) -> bool:
     return time >= _COMPACT_WY_BACKWARD_MIN_TOKENS or (
         time == 64 and chunk_heads >= _T64_COMPACT_WY_MIN_CHUNK_HEADS
     )
+
+
+def _training_batch_ranges(
+    batch: int,
+    time: int,
+    heads: int,
+    dtype: torch.dtype,
+) -> tuple[tuple[int, int], ...]:
+    """Return balanced batch ranges whose state boundaries fit 32-bit offsets."""
+
+    if batch <= 0 or time < _PARALLEL_BACKWARD_MIN_TOKENS or heads <= 0:
+        return ((0, batch),)
+
+    n_chunks = math.ceil(time / _CHUNK_SIZE)
+    compact_boundaries = (
+        dtype == torch.bfloat16
+        and time >= _COMPACT_WY_BACKWARD_MIN_TOKENS
+        and time % _CHUNK_SIZE == 0
+    )
+    boundary_element_size = 2 if compact_boundaries else 4
+    boundary_bytes_per_batch = (n_chunks + 1) * heads * _DIM * _DIM * boundary_element_size
+    max_batch = max(1, _CUTE_TENSOR_BYTE_ADDRESS_LIMIT // boundary_bytes_per_batch)
+    if batch <= max_batch:
+        return ((0, batch),)
+
+    # Balance the slices rather than emitting max_batch plus a small tail.
+    # B4/T32768/H16 BF16 therefore becomes B2+B2 instead of B3+B1, letting
+    # both calls reuse one compiled specialization and similar grid sizes.
+    n_ranges = math.ceil(batch / max_batch)
+    base_size, larger_ranges = divmod(batch, n_ranges)
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    for index in range(n_ranges):
+        size = base_size + (index < larger_ranges)
+        stop = start + size
+        ranges.append((start, stop))
+        start = stop
+    return tuple(ranges)
 
 
 class _ChunkGDN2(torch.autograd.Function):
@@ -227,17 +269,55 @@ def chunk_gdn2(
         isinstance(tensor, torch.Tensor) and tensor.requires_grad
         for tensor in differentiable_inputs
     )
-    output, final_state = _ChunkGDN2.apply(
-        q,
-        k,
-        v,
-        g,
-        beta,
-        w,
-        initial_state,
-        output_scale,
-        prepare_backward,
+    sequence_inputs = (q, k, v, g, beta, w)
+    can_slice_batch = (
+        prepare_backward
+        and all(
+            isinstance(tensor, torch.Tensor) and tensor.ndim == 4 and tensor.shape[0] == q.shape[0]
+            for tensor in sequence_inputs
+        )
+        and (
+            initial_state is None
+            or (
+                isinstance(initial_state, torch.Tensor)
+                and initial_state.ndim == 4
+                and initial_state.shape[0] == q.shape[0]
+            )
+        )
     )
+    batch_ranges = (
+        _training_batch_ranges(q.shape[0], q.shape[1], q.shape[2], q.dtype)
+        if can_slice_batch
+        else None
+    )
+    if batch_ranges is None or len(batch_ranges) == 1:
+        output, final_state = _ChunkGDN2.apply(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            w,
+            initial_state,
+            output_scale,
+            prepare_backward,
+        )
+    else:
+        outputs: list[torch.Tensor] = []
+        final_states: list[torch.Tensor] = []
+        for start, stop in batch_ranges:
+            sliced_inputs = tuple(tensor[start:stop] for tensor in sequence_inputs)
+            sliced_initial_state = initial_state[start:stop] if initial_state is not None else None
+            sliced_output, sliced_final_state = _ChunkGDN2.apply(
+                *sliced_inputs,
+                sliced_initial_state,
+                output_scale,
+                prepare_backward,
+            )
+            outputs.append(sliced_output)
+            final_states.append(sliced_final_state)
+        output = torch.cat(outputs, dim=0)
+        final_state = torch.cat(final_states, dim=0)
     return output, final_state if output_final_state else None
 
 

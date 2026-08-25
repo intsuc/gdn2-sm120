@@ -54,6 +54,11 @@ _K_SPLIT_LONG_MIN_CHUNKS = 32
 # scan traffic; below it V8 exposes the missing independent value tiles.  Both
 # schedules retain the proven K16/eight-warp split.
 _K_SPLIT_V16_MIN_BATCH_HEADS = 12
+# Some vectorized CuTe copies lower tensor byte offsets to 32-bit arithmetic.
+# Keep every saved boundary tensor within the full unsigned address range; the
+# public autograd wrapper batch-tiles larger training calls before reaching
+# this low-level API.
+_MAX_CUTE_TENSOR_BYTES = 1 << 32
 # The V16 algebra scan reuses its 16x16 shared state tile for K-tail; the V8
 # specialization allocates an explicit K-tail stage of the same shape.
 _ALGEBRA_MIN_CHUNKS = _K_SPLIT_LONG_MIN_CHUNKS
@@ -68,6 +73,18 @@ def _select_k_split_value_tile(batch: int, heads: int, n_chunks: int) -> int:
     if batch * heads < _K_SPLIT_V16_MIN_BATCH_HEADS:
         return _K_SPLIT_VALUE_TILE
     return _K_SPLIT_LONG_VALUE_TILE
+
+
+def _state_boundary_storage_bytes(
+    batch: int,
+    time: int,
+    heads: int,
+    element_size: int,
+) -> int:
+    """Return bytes required by the ``[B, C + 1, H, 128, 128]`` checkpoints."""
+
+    n_chunks = math.ceil(time / _CHUNK_SIZE)
+    return batch * (n_chunks + 1) * heads * _KEY_DIM * _VALUE_DIM * element_size
 
 
 @cute.jit
@@ -1048,6 +1065,19 @@ def chunk_forward(
     compact_aux = not return_aux and n_chunks >= _K_SPLIT_MIN_CHUNKS and full_chunks
     compact_backward_aux = return_aux and time >= 128 and full_chunks
     compact_state_boundaries = compact_backward_aux and q.dtype == torch.bfloat16
+    if return_aux:
+        boundary_element_size = q.element_size() if compact_state_boundaries else 4
+        boundary_bytes = _state_boundary_storage_bytes(
+            batch,
+            time,
+            heads,
+            boundary_element_size,
+        )
+        if boundary_bytes > _MAX_CUTE_TENSOR_BYTES:
+            raise ValueError(
+                "state-boundary storage exceeds the CuTe 4-GiB per-launch address limit; "
+                "use chunk_gdn2 so the training batch can be tiled"
+            )
     # The rearranged output keeps BF16's FP32-like exponent range, but could
     # overflow an FP16 intermediate that cancels in the original expression.
     use_algebra = q.dtype == torch.bfloat16 and full_chunks and n_chunks >= _ALGEBRA_MIN_CHUNKS

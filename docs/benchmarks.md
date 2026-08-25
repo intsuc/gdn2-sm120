@@ -21,6 +21,8 @@ claim about complete model throughput.
 - warmup/sample counts are recorded per row
 - compilation and Triton autotuning occur during warmup and are excluded
 - compared at each implementation's public Python call boundary
+- the canonical chunk sweep fixes H=16, varies B over 1/2/4, and varies T over
+  16/64/128/256/512/1024/2048/4096/8192/16384/32768
 - the canonical token sweep fixes B=1/H=32 and varies T over powers of two;
   connected token points therefore differ only in sequence length
 - backward-only builds each graph before timing and uses
@@ -60,6 +62,28 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 8192 | 16 | 20 / 100 | 978.0 | 1036.4 | **1.06x** | 1.41e-3 |
 | chunk forward | 1 | 16384 | 16 | 10 / 50 | 1889.5 | 2111.5 | **1.12x** | 1.50e-3 |
 | chunk forward | 1 | 32768 | 16 | 10 / 50 | 3725.3 | 4231.9 | **1.14x** | 1.82e-3 |
+| chunk forward | 2 | 16 | 16 | 40 / 300 | 35.4 | 179.8 | **5.08x** | 1.32e-3 |
+| chunk forward | 2 | 64 | 16 | 40 / 300 | 44.4 | 181.4 | **4.08x** | 1.36e-3 |
+| chunk forward | 2 | 128 | 16 | 40 / 300 | 56.9 | 186.0 | **3.27x** | 1.62e-3 |
+| chunk forward | 2 | 256 | 16 | 40 / 300 | 82.2 | 180.5 | **2.20x** | 1.40e-3 |
+| chunk forward | 2 | 512 | 16 | 40 / 300 | 97.7 | 184.4 | **1.89x** | 1.51e-3 |
+| chunk forward | 2 | 1024 | 16 | 40 / 300 | 163.1 | 221.5 | **1.36x** | 1.35e-3 |
+| chunk forward | 2 | 2048 | 16 | 40 / 300 | 367.7 | 433.4 | **1.18x** | 1.47e-3 |
+| chunk forward | 2 | 4096 | 16 | 20 / 100 | 802.6 | 944.4 | **1.18x** | 1.37e-3 |
+| chunk forward | 2 | 8192 | 16 | 20 / 100 | 1547.3 | 1956.7 | **1.26x** | 1.48e-3 |
+| chunk forward | 2 | 16384 | 16 | 10 / 50 | 3043.7 | 3959.6 | **1.30x** | 2.11e-3 |
+| chunk forward | 2 | 32768 | 16 | 10 / 50 | 6155.5 | 7955.2 | **1.29x** | 1.51e-3 |
+| chunk forward | 4 | 16 | 16 | 40 / 300 | 40.3 | 181.7 | **4.51x** | 1.32e-3 |
+| chunk forward | 4 | 64 | 16 | 40 / 300 | 59.6 | 181.7 | **3.05x** | 1.57e-3 |
+| chunk forward | 4 | 128 | 16 | 40 / 300 | 85.4 | 180.8 | **2.12x** | 1.62e-3 |
+| chunk forward | 4 | 256 | 16 | 40 / 300 | 136.6 | 180.7 | **1.32x** | 1.68e-3 |
+| chunk forward | 4 | 512 | 16 | 40 / 300 | 144.9 | 219.2 | **1.51x** | 1.56e-3 |
+| chunk forward | 4 | 1024 | 16 | 40 / 300 | 359.5 | 415.9 | **1.16x** | 1.60e-3 |
+| chunk forward | 4 | 2048 | 16 | 40 / 300 | 771.3 | 920.7 | **1.19x** | 1.64e-3 |
+| chunk forward | 4 | 4096 | 16 | 20 / 100 | 1493.9 | 1914.8 | **1.28x** | 1.47e-3 |
+| chunk forward | 4 | 8192 | 16 | 20 / 100 | 2898.6 | 3882.8 | **1.34x** | 2.06e-3 |
+| chunk forward | 4 | 16384 | 16 | 10 / 50 | 5783.9 | 7797.7 | **1.35x** | 2.28e-3 |
+| chunk forward | 4 | 32768 | 16 | 10 / 50 | 11553.5 | 15661.8 | **1.36x** | 1.83e-3 |
 | chunk backward | 1 | 16 | 16 | 40 / 300 | 112.1 | 274.6 | **2.45x** | 3.91e-3 |
 | chunk backward | 1 | 64 | 16 | 40 / 300 | 175.5 | 399.6 | **2.28x** | 2.44e-3 |
 | chunk backward | 1 | 128 | 16 | 40 / 300 | 126.4 | 279.3 | **2.21x** | 2.08e-3 |
@@ -71,6 +95,28 @@ CuTe-versus-official comparison.
 | chunk backward | 1 | 8192 | 16 | 20 / 100 | 2838.6 | 3126.1 | **1.10x** | 2.93e-3 |
 | chunk backward | 1 | 16384 | 16 | 10 / 50 | 5810.6 | 6353.5 | **1.09x** | 1.95e-3 |
 | chunk backward | 1 | 32768 | 16 | 10 / 50 | 11737.6 | 12638.0 | **1.08x** | 3.91e-3 |
+| chunk backward | 2 | 16 | 16 | 40 / 300 | 120.1 | 276.6 | **2.30x** | 3.91e-3 |
+| chunk backward | 2 | 64 | 16 | 40 / 300 | 132.5 | 279.8 | **2.11x** | 2.93e-3 |
+| chunk backward | 2 | 128 | 16 | 40 / 300 | 134.6 | 278.6 | **2.07x** | 2.93e-3 |
+| chunk backward | 2 | 256 | 16 | 40 / 300 | 147.9 | 282.6 | **1.91x** | 2.44e-3 |
+| chunk backward | 2 | 512 | 16 | 40 / 300 | 294.0 | 390.2 | **1.33x** | 3.91e-3 |
+| chunk backward | 2 | 1024 | 16 | 40 / 300 | 698.7 | 720.9 | **1.03x** | 2.44e-3 |
+| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1278.5 | 1312.5 | **1.03x** | 2.93e-3 |
+| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2761.6 | 2819.5 | **1.02x** | 3.91e-3 |
+| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5640.4 | 5723.3 | **1.01x** | 3.91e-3 |
+| chunk backward | 2 | 16384 | 16 | 10 / 50 | 11501.4 | 11405.8 | **0.99x** | 3.91e-3 |
+| chunk backward | 2 | 32768 | 16 | 10 / 50 | 24403.8 | 23002.3 | **0.94x** | 3.91e-3 |
+| chunk backward | 4 | 16 | 16 | 40 / 300 | 150.0 | 276.0 | **1.84x** | 3.91e-3 |
+| chunk backward | 4 | 64 | 16 | 40 / 300 | 142.9 | 277.4 | **1.94x** | 3.91e-3 |
+| chunk backward | 4 | 128 | 16 | 40 / 300 | 190.0 | 397.1 | **2.09x** | 3.91e-3 |
+| chunk backward | 4 | 256 | 16 | 40 / 300 | 295.7 | 392.2 | **1.33x** | 3.91e-3 |
+| chunk backward | 4 | 512 | 16 | 40 / 300 | 666.7 | 622.4 | **0.93x** | 3.91e-3 |
+| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1342.5 | 1248.3 | **0.93x** | 3.91e-3 |
+| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2763.8 | 2715.0 | **0.98x** | 3.91e-3 |
+| chunk backward | 4 | 4096 | 16 | 20 / 100 | 5705.3 | 5466.6 | **0.96x** | 3.91e-3 |
+| chunk backward | 4 | 8192 | 16 | 20 / 100 | 12195.8 | 10948.5 | **0.90x** | 3.91e-3 |
+| chunk backward | 4 | 16384 | 16 | 10 / 50 | 26170.8 | 22134.0 | **0.85x** | 3.91e-3 |
+| chunk backward | 4 | 32768 | 16 | 10 / 50 | 65718.2 | 43955.4 | **0.67x** | 3.91e-3 |
 | token forward | 1 | 1 | 32 | 25 / 100 | 13.3 | 25.4 | **1.91x** | 2.98e-8 |
 | token forward | 1 | 2 | 32 | 25 / 100 | 14.8 | 25.2 | **1.70x** | 5.96e-8 |
 | token forward | 1 | 4 | 32 | 25 / 100 | 16.5 | 26.0 | **1.57x** | 5.96e-8 |
@@ -80,13 +126,19 @@ CuTe-versus-official comparison.
 | token forward | 1 | 64 | 32 | 25 / 100 | 49.4 | 71.9 | **1.45x** | 6.10e-5 |
 | token forward | 1 | 128 | 32 | 25 / 100 | 84.3 | 120.2 | **1.43x** | 6.10e-5 |
 
-Forward and backward both stay ahead at every measured point through T=32768.
+Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
+longest-sequence speedups are 1.14x, 1.29x, and 1.36x respectively. Backward is
+batch-dependent: B1 stays ahead at all 11 lengths, B2 stays ahead through
+T=8192 before reaching 0.99x/0.94x at T=16384/32768, and B4 stays ahead through
+T=256 before reaching 0.93x at T=512 and 0.67x at T=32768.
+
 The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
-the new CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
+the CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
 scan. T=128 additionally enables compact BF16 checkpoints and measures 126.4 us.
-The backward advantage narrows from 2.45x at T=16 to 1.08x at T=32768 without a
-measured crossover, while the checkpointed path also removes the old T=128
-correctness cap.
+The checkpointed path removes the old T=128 correctness cap. B4/T32768 training
+is automatically evaluated as two balanced B2 tiles so that each saved
+state-boundary tensor remains within CuTe's 4-GiB byte-address range; the
+backward-only timing includes the resulting public autograd graph.
 
 The fixed B1/H32 token sweep stays ahead at all eight sampled decode lengths.
 Its public-call speedup is 1.91x at T=1 and remains 1.43x at T=128; these rows
@@ -223,7 +275,9 @@ uv run --group visualization gdn2-sm120-plot \
 it with `-dark` appended to the stem.
 
 The plot uses medians only. A minimum is not a dispersion estimate or confidence
-interval, so it is deliberately not drawn as an error bar. When all token points
+interval, so it is deliberately not drawn as an error bar. The chunk panels
+draw separate B1/B2/B4 series at fixed H=16 and shared log₂-spaced T positions;
+solid, dashed, and dotted lines distinguish the batches. When all token points
 share B and H, the token panel connects them at log₂-spaced T positions and
 labels the official/CuTe speedup at every sample. If either B or H differs, it
 falls back to independent grouped bars rather than implying a scaling curve
@@ -262,12 +316,13 @@ between old and new measurements.
 
 ## Interpretation
 
-The optimization goal is met for all three kernel families and now extends to
-substantially longer chunk sequences. Chunk forward and backward-only are
-faster at every measured length through T=32768, and token forward is faster at
-every fixed-B1/H32 point through T=128. The backward margin gradually narrows
-but remains 1.08x at the longest point. These are primitive-level latencies,
-not complete training-throughput measurements. Reducing
-checkpoint/workspace memory, additional dimensions, packed sequences, and
-fused normalization/gates remain separate milestones; the measured B1/H16
-results must not be extrapolated to those workloads.
+The optimization goal is met across the measured batch sweep for chunk forward
+and the B1 sweep for chunk backward. Chunk forward is faster at every B1/B2/B4
+length through T=32768. Backward is faster for B1 at every length, for B2
+through T=8192, and for B4 through T=256; the longer B2/B4 results identify a
+real scaling crossover rather than an unmeasured extrapolation. Token forward
+is faster at every fixed-B1/H32 point through T=128. These are primitive-level
+latencies, not complete training-throughput measurements. Reducing
+checkpoint/workspace memory, improving multi-batch backward scaling,
+additional dimensions, packed sequences, and fused normalization/gates remain
+separate milestones.

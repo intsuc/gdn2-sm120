@@ -141,6 +141,24 @@ through T=32768 remain within `3.91e-3` maximum absolute error.
 For B1/T512/H16, the compact-WY stage uses about 22 MiB of lifetime-colored
 sequence workspace plus 1.5 MiB of square workspace.
 
+### Multi-batch training boundary limit
+
+Some generated CuTe compact-copy layouts use 32-bit byte offsets. Before a
+gradient-enabled public call, the wrapper therefore computes the storage of
+one `[B, ceil(T / 16) + 1, H, 128, 128]` state-boundary tensor and splits the
+batch when that tensor would exceed the 4-GiB address range. Full-chunk BF16
+training at T>=128 uses two-byte compact boundaries; FP16, short, and partial
+tail paths use four-byte FP32 boundaries for this calculation.
+
+The split is balanced rather than taking the largest possible first tile. For
+B4/T32768/H16 BF16, the public autograd path consequently uses B2+B2, allowing
+both tiles to reuse one compiled specialization and comparable grid sizes. All
+six sequence inputs and an optional initial state are sliced on the batch axis;
+outputs and final states are concatenated on that axis, so autograd routes each
+gradient through the matching tile. Forward-only calls remain one unsplit
+public apply, and a direct low-level training call above the limit fails
+explicitly instead of permitting a wrapped address.
+
 ## Token forward
 
 When `T=1` and no initial state is supplied, decay and erase multiply only the

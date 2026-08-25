@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 import torch
 
-from gdn2_sm120.chunk import _select_k_split_value_tile, chunk_forward
+import gdn2_sm120.chunk as chunk_module
+from gdn2_sm120.chunk import (
+    _MAX_CUTE_TENSOR_BYTES,
+    _select_k_split_value_tile,
+    _state_boundary_storage_bytes,
+    chunk_forward,
+)
 from gdn2_sm120.reference import chunkwise_forward_reference
 
 
@@ -54,6 +60,28 @@ def _inputs(
 )
 def test_select_k_split_value_tile(batch: int, heads: int, n_chunks: int, expected: int) -> None:
     assert _select_k_split_value_tile(batch, heads, n_chunks) == expected
+
+
+def test_state_boundary_storage_identifies_four_gib_address_limit() -> None:
+    assert _state_boundary_storage_bytes(3, 32768, 16, 2) <= _MAX_CUTE_TENSOR_BYTES
+    assert _state_boundary_storage_bytes(4, 32768, 16, 2) > _MAX_CUTE_TENSOR_BYTES
+    assert _state_boundary_storage_bytes(1, 32768, 16, 4) <= _MAX_CUTE_TENSOR_BYTES
+    assert _state_boundary_storage_bytes(2, 32768, 16, 4) > _MAX_CUTE_TENSOR_BYTES
+
+
+@pytest.mark.cuda
+def test_chunk_forward_rejects_aux_boundary_above_address_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
+        pytest.skip("requires SM120")
+    time = 128
+    args = _inputs(time, batch=2, heads=1)
+    per_batch_bytes = _state_boundary_storage_bytes(1, time, 1, 2)
+    monkeypatch.setattr(chunk_module, "_MAX_CUTE_TENSOR_BYTES", per_batch_bytes)
+
+    with pytest.raises(ValueError, match="4-GiB per-launch address limit"):
+        chunk_forward(*args[:6], args[6], return_aux=True)
 
 
 @pytest.mark.cuda

@@ -23,6 +23,7 @@ _CHUNK_TRITON_ROW_Y = 0.855
 _CHUNK_SPEEDUP_ROW_Y = 0.945
 _TOKEN_DATA_TOP_FRACTION = 0.82
 _TOKEN_SPEEDUP_ROW_Y = 0.94
+_BATCH_LINESTYLES = ("-", "--", ":", "-.")
 
 
 @dataclass(frozen=True)
@@ -326,6 +327,17 @@ def _plot_chunk_panel(
 ) -> None:
     from matplotlib.patches import Rectangle
 
+    shapes = {(point.batch, point.heads) for point in points}
+    if len(shapes) > 1:
+        _plot_multi_shape_chunk_panel(
+            axis,
+            points,
+            title,
+            log_latency=log_latency,
+            palette=palette,
+        )
+        return
+
     cute_color = palette.cute
     triton_color = palette.triton
     xs = [math.log2(point.time) for point in points]
@@ -494,6 +506,167 @@ def _plot_chunk_panel(
             zorder=7,
             clip_on=False,
         )
+
+
+def _plot_multi_shape_chunk_panel(
+    axis: Any,
+    points: list[BenchmarkPoint],
+    title: str,
+    *,
+    log_latency: bool,
+    palette: PlotPalette,
+) -> None:
+    """Draw independent fixed-B/H chunk sweeps on shared sequence-length ticks."""
+
+    from matplotlib.patches import Rectangle
+
+    grouped: dict[tuple[int, int], list[BenchmarkPoint]] = {}
+    for point in points:
+        grouped.setdefault((point.batch, point.heads), []).append(point)
+    groups = [
+        (shape, sorted(shape_points, key=lambda point: point.time))
+        for shape, shape_points in sorted(grouped.items())
+    ]
+    batches = sorted({batch for (batch, _), _ in groups})
+    linestyle_by_batch = {
+        batch: _BATCH_LINESTYLES[index % len(_BATCH_LINESTYLES)]
+        for index, batch in enumerate(batches)
+    }
+    times = sorted({point.time for point in points})
+    xs = [math.log2(time) for time in times]
+    cute = [point.cute_median_us for point in points]
+    triton = [point.triton_median_us for point in points]
+    maximum = max((*cute, *triton))
+    minimum = min((*cute, *triton))
+
+    for index, ((batch, _), shape_points) in enumerate(groups):
+        shape_xs = [math.log2(point.time) for point in shape_points]
+        linestyle = linestyle_by_batch[batch]
+        axis.plot(
+            shape_xs,
+            [point.cute_median_us for point in shape_points],
+            color=palette.cute,
+            marker="o",
+            linestyle=linestyle,
+            linewidth=2.4,
+            label="CuTe SM120" if index == 0 else "_nolegend_",
+            zorder=3,
+            gid="chunk-series",
+        )
+        axis.plot(
+            shape_xs,
+            [point.triton_median_us for point in shape_points],
+            color=palette.triton,
+            marker="s",
+            linestyle=linestyle,
+            linewidth=2.2,
+            label="Official Triton" if index == 0 else "_nolegend_",
+            zorder=3,
+            gid="chunk-series",
+        )
+
+    axis.set_title(title, loc="left", fontweight="bold", fontsize=12)
+    axis.set_xticks(
+        xs,
+        [str(time) for time in times],
+        rotation=35 if len(times) > 6 else 0,
+        ha="right" if len(times) > 6 else "center",
+        rotation_mode="anchor",
+    )
+    heads = {heads for (_, heads), _ in groups}
+    shape_suffix = f"fixed H{next(iter(heads))}" if len(heads) == 1 else "grouped by B/H"
+    axis.set_xlabel(f"Sequence length T (log₂ spacing) · {shape_suffix}")
+
+    if log_latency:
+        axis.set_yscale("log", base=2)
+        lower_power = math.floor(math.log2(minimum)) - 0.45
+        maximum_power = math.log2(maximum)
+        upper_power = lower_power + (maximum_power - lower_power) / _CHUNK_DATA_TOP_FRACTION
+        ticks = [
+            2.0**power for power in range(math.ceil(lower_power), math.floor(maximum_power) + 1)
+        ]
+        axis.set_yticks(ticks, [f"{tick:g}" for tick in ticks])
+        axis.set_ylabel("Median latency (µs / call, log₂ scale)")
+        axis.set_ylim(2.0**lower_power, 2.0**upper_power)
+        axis.grid(axis="y", which="major", color=palette.grid, linewidth=0.8)
+    else:
+        axis.set_ylabel("Median latency (µs / call)")
+        axis.set_ylim(0.0, maximum / _CHUNK_DATA_TOP_FRACTION)
+        axis.grid(axis="y", color=palette.grid, linewidth=0.8)
+    axis.set_axisbelow(True)
+
+    axis.add_patch(
+        Rectangle(
+            (0.0, _CHUNK_RAIL_BOTTOM),
+            1.0,
+            1.0 - _CHUNK_RAIL_BOTTOM,
+            transform=axis.transAxes,
+            facecolor=palette.background,
+            edgecolor="none",
+            zorder=5,
+            gid="chunk-value-rail",
+        )
+    )
+    row_height = (1.0 - _CHUNK_RAIL_BOTTOM) / len(groups)
+    row_ys = [_CHUNK_RAIL_BOTTOM + (index + 0.5) * row_height for index in range(len(groups))]
+    for index in range(len(groups) + 1):
+        y = _CHUNK_RAIL_BOTTOM + index * row_height
+        axis.plot(
+            [0.0, 1.0],
+            [y, y],
+            transform=axis.transAxes,
+            color=palette.grid,
+            linewidth=0.75,
+            zorder=6,
+            clip_on=False,
+            gid="chunk-rail-separator",
+        )
+
+    rail_transform = axis.get_xaxis_transform()
+    label_fontsize = 6.2 if len(times) >= 11 else 7.8
+    fixed_heads = len(heads) == 1
+    for ((batch, heads_for_group), shape_points), y in zip(groups, row_ys, strict=True):
+        key = f"B{batch}" if fixed_heads else f"B{batch}/H{heads_for_group}"
+        axis.plot(
+            [-0.055, -0.025],
+            [y, y],
+            transform=axis.transAxes,
+            color=palette.foreground,
+            linestyle=linestyle_by_batch[batch],
+            linewidth=1.8,
+            zorder=7,
+            clip_on=False,
+            gid="chunk-rail-key-line",
+        )
+        axis.text(
+            -0.065,
+            y,
+            key,
+            transform=axis.transAxes,
+            ha="right",
+            va="center",
+            color=palette.foreground,
+            fontsize=7.2,
+            fontweight="bold",
+            zorder=7,
+            clip_on=False,
+            gid="chunk-rail-key",
+        )
+        for point in shape_points:
+            label, color = _speedup_label(point.speedup, palette)
+            axis.text(
+                math.log2(point.time),
+                y,
+                label,
+                transform=rail_transform,
+                ha="center",
+                va="center",
+                color=color,
+                fontsize=label_fontsize,
+                fontweight="bold",
+                zorder=7,
+                gid="chunk-rail-label",
+            )
 
 
 def _plot_token_panel(

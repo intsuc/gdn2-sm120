@@ -182,10 +182,12 @@ uv run --group visualization gdn2-sm120-plot \
 `--output` names the light/fallback figure; the plotter also writes the sibling
 `docs/assets/benchmark-results-sm120-dark.png`.
 
-When every token-forward point has the same batch and head count, its panel is
-a connected sequence-length sweep with log₂-spaced T positions and a speedup
-label at every sample. Mixed B/H token shapes remain independent grouped bars,
-so the figure does not imply a scaling curve across different workloads.
+The chunk panels overlay the fixed-H16 B1/B2/B4 sweeps and distinguish batch
+size by line style. When every token-forward point has the same batch and head
+count, its panel is a connected sequence-length sweep with log₂-spaced T
+positions and a speedup label at every sample. Mixed B/H token shapes remain
+independent grouped bars, so the figure does not imply a scaling curve across
+different workloads.
 
 Representative BF16 medians on the target workstation are:
 
@@ -196,12 +198,18 @@ Representative BF16 medians on the target workstation are:
 | chunk forward | B1 T2048 H16 | 172.5 us | 236.4 us | **1.37x** |
 | chunk forward | B1 T16384 H16 | 1889.5 us | 2111.5 us | **1.12x** |
 | chunk forward | B1 T32768 H16 | 3725.3 us | 4231.9 us | **1.14x** |
+| chunk forward | B2 T32768 H16 | 6155.5 us | 7955.2 us | **1.29x** |
+| chunk forward | B4 T32768 H16 | 11553.5 us | 15661.8 us | **1.36x** |
 | chunk backward | B1 T16 H16 | 112.1 us | 274.6 us | **2.45x** |
 | chunk backward | B1 T64 H16 | 175.5 us | 399.6 us | **2.28x** |
 | chunk backward | B1 T512 H16 | 148.8 us | 284.0 us | **1.91x** |
 | chunk backward | B1 T2048 H16 | 623.7 us | 708.6 us | **1.14x** |
 | chunk backward | B1 T16384 H16 | 5810.6 us | 6353.5 us | **1.09x** |
 | chunk backward | B1 T32768 H16 | 11737.6 us | 12638.0 us | **1.08x** |
+| chunk backward | B2 T8192 H16 | 5640.4 us | 5723.3 us | **1.01x** |
+| chunk backward | B2 T32768 H16 | 24403.8 us | 23002.3 us | **0.94x** |
+| chunk backward | B4 T256 H16 | 295.7 us | 392.2 us | **1.33x** |
+| chunk backward | B4 T32768 H16 | 65718.2 us | 43955.4 us | **0.67x** |
 | token forward | B1 T1 H32 | 13.3 us | 25.4 us | **1.91x** |
 | token forward | B1 T128 H32 | 84.3 us | 120.2 us | **1.43x** |
 
@@ -240,14 +248,15 @@ replacement for every official option. The primary production shape
 log-decay, optional initial state, final-state VJPs, empty recurrent sequences,
 non-default CUDA streams, unaligned contiguous recurrent states, reusable
 output buffers, and explicit in-place recurrent state updates. In the measured
-B1/H16 BF16 sweep, both chunk forward and chunk backward remain faster than the
-official path at every sampled length through T=32768. Backward speedup ranges
-from 2.45x at T=16 to 1.08x at T=32768. The fixed B1/H32 token sweep is 1.91x
-faster at T=1 and 1.43x faster at T=128. The checkpointed path trades memory
-for speed: compact BF16 boundaries halve checkpoint bytes relative to FP32, but
-the CuTe path still retains both boundary sets and compact-WY workspace and
-therefore uses more memory than the official path. Additional dimensions,
-packed sequences, and further reducing checkpoint memory remain optimization
-work.
+B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
+at every sampled length through T=32768. Chunk backward remains faster for all
+B1 points, for B2 through T=8192, and for B4 through T=256; the official path
+is faster at the longer measured B2/B4 points. The fixed B1/H32 token sweep is
+1.91x faster at T=1 and 1.43x faster at T=128. The checkpointed path trades
+memory for speed: compact BF16 boundaries halve checkpoint bytes relative to
+FP32, but the CuTe path still retains both boundary sets and compact-WY
+workspace and therefore uses more memory than the official path. Additional
+dimensions, packed sequences, and further reducing checkpoint memory remain
+optimization work.
 
 Licensed under Apache-2.0. See [`LICENSE`](LICENSE).

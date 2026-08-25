@@ -72,6 +72,17 @@ def _three_mode_suite(path: Path) -> None:
     )
 
 
+def _mixed_batch_chunk_records(mode: str = "chunk-forward") -> list[dict[str, object]]:
+    return [
+        _record(mode, 16, batch=1, cute_us=40.0, triton_us=80.0),
+        _record(mode, 64, batch=1, cute_us=60.0, triton_us=90.0),
+        _record(mode, 16, batch=2, cute_us=75.0, triton_us=90.0),
+        _record(mode, 128, batch=2, cute_us=110.0, triton_us=99.0),
+        _record(mode, 64, batch=4, cute_us=150.0, triton_us=165.0),
+        _record(mode, 256, batch=4, cute_us=210.0, triton_us=252.0),
+    ]
+
+
 def test_loads_and_sorts_current_suite(tmp_path: Path) -> None:
     source = tmp_path / "suite.json"
     _three_mode_suite(source)
@@ -87,6 +98,36 @@ def test_loads_and_sorts_current_suite(tmp_path: Path) -> None:
     ]
     assert suite.points[0].speedup == pytest.approx(189.7 / 43.5)
     assert suite.device.startswith("NVIDIA RTX PRO 6000")
+
+
+def test_loads_same_chunk_times_for_distinct_batches(tmp_path: Path) -> None:
+    source = tmp_path / "mixed-batch.json"
+    records = _mixed_batch_chunk_records()
+    records.append(_record("chunk-forward", 16, batch=4, cute_us=130.0, triton_us=143.0))
+    _write_suite(source, records)
+
+    points = load_benchmarks([source]).points
+
+    assert {(point.batch, point.time, point.heads) for point in points} == {
+        (1, 16, 16),
+        (1, 64, 16),
+        (2, 16, 16),
+        (2, 128, 16),
+        (4, 16, 16),
+        (4, 64, 16),
+        (4, 256, 16),
+    }
+
+
+def test_tracked_chunk_sweeps_cover_all_published_batches_and_lengths() -> None:
+    source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
+    points = load_benchmarks([source]).points
+    times = (16, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+    expected = {(batch, time, 16) for batch in (1, 2, 4) for time in times}
+
+    for mode in ("chunk-forward", "chunk-backward"):
+        actual = {(point.batch, point.time, point.heads) for point in points if point.mode == mode}
+        assert actual == expected
 
 
 def test_rejects_duplicate_logical_shape(tmp_path: Path) -> None:
@@ -290,12 +331,20 @@ def test_mixed_token_shapes_keep_grouped_bar_fallback(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("theme", ("light", "dark"))
-def test_chunk_values_render_in_a_rail_above_the_data(theme: str) -> None:
+def test_chunk_values_render_in_a_rail_above_the_data(tmp_path: Path, theme: str) -> None:
     pytest.importorskip("matplotlib")
     from matplotlib import pyplot as plt
     from matplotlib.colors import to_hex
 
-    source = Path(__file__).parents[1] / "docs/data/benchmark-results-sm120.json"
+    source = tmp_path / "single-batch-chunks.json"
+    _write_suite(
+        source,
+        [
+            _record(mode, time, cute_us=40.0 + time, triton_us=70.0 + time * 1.25)
+            for mode in ("chunk-forward", "chunk-backward")
+            for time in (16, 64, 128)
+        ],
+    )
     suite = load_benchmarks([source])
     palette = plot_benchmarks._plot_palette(theme)
 
@@ -351,3 +400,76 @@ def test_chunk_values_render_in_a_rail_above_the_data(theme: str) -> None:
             )
         finally:
             plt.close(figure)
+
+
+@pytest.mark.parametrize("theme", ("light", "dark"))
+def test_mixed_batch_chunk_sweeps_use_independent_lines_union_ticks_and_speedup_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    theme: str,
+) -> None:
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot as plt
+
+    source = tmp_path / "mixed-batch-chunks.json"
+    records = _mixed_batch_chunk_records()
+    _write_suite(source, records)
+    points = list(load_benchmarks([source]).points)
+    palette = plot_benchmarks._plot_palette(theme)
+    figure, axis = plt.subplots()
+    connectors: list[object] = []
+    crossovers: list[object] = []
+    monkeypatch.setattr(axis, "vlines", lambda *args, **kwargs: connectors.append((args, kwargs)))
+    monkeypatch.setattr(axis, "axvspan", lambda *args, **kwargs: crossovers.append((args, kwargs)))
+    try:
+        plot_benchmarks._plot_chunk_panel(
+            axis,
+            points,
+            "Chunk forward",
+            log_latency=True,
+            palette=palette,
+        )
+        figure.canvas.draw()
+
+        series = [line for line in axis.lines if line.get_gid() == "chunk-series"]
+        assert len(series) == 6
+        assert [line.get_color() for line in series] == [
+            palette.cute,
+            palette.triton,
+        ] * 3
+        assert [line.get_marker() for line in series] == ["o", "s"] * 3
+        assert [line.get_linestyle() for line in series] == ["-", "-", "--", "--", ":", ":"]
+        assert [list(line.get_xdata()) for line in series] == [
+            [4.0, 6.0],
+            [4.0, 6.0],
+            [4.0, 7.0],
+            [4.0, 7.0],
+            [6.0, 8.0],
+            [6.0, 8.0],
+        ]
+        assert [line.get_label() for line in series] == [
+            "CuTe SM120",
+            "Official Triton",
+            "_nolegend_",
+            "_nolegend_",
+            "_nolegend_",
+            "_nolegend_",
+        ]
+        assert connectors == []
+        assert crossovers == []
+
+        assert list(axis.get_xticks()) == pytest.approx([4.0, 6.0, 7.0, 8.0])
+        assert [tick.get_text() for tick in axis.get_xticklabels()] == ["16", "64", "128", "256"]
+        assert axis.get_xlabel() == "Sequence length T (log₂ spacing) · fixed H16"
+
+        keys = [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-key"]
+        assert keys == ["B1", "B2", "B4"]
+        labels = [text.get_text() for text in axis.texts if text.get_gid() == "chunk-rail-label"]
+        assert Counter(labels) == Counter(
+            plot_benchmarks._speedup_label(point.speedup, palette)[0] for point in points
+        )
+        assert len(labels) == len(points)
+        assert all(label.endswith("×") for label in labels)
+        assert len([patch for patch in axis.patches if patch.get_gid() == "chunk-value-rail"]) == 1
+    finally:
+        plt.close(figure)
