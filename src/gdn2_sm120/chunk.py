@@ -51,12 +51,12 @@ _K_SPLIT_WARPS = _KEY_DIM // 16
 _K_SPLIT_THREADS = _K_SPLIT_WARPS * 32
 _K_SPLIT_VALUE_TILE = 8
 _K_SPLIT_MIN_CHUNKS = 1
-_K_SPLIT_LONG_VALUE_TILE = 16
-_K_SPLIT_LONG_MIN_CHUNKS = 32
+_K_SPLIT_FILLED_VALUE_TILE = 16
 # V8 launches sixteen CTAs per (batch, head), reaching a full 188-SM wave at
 # twelve heads across the batch.  From there V16 wins by halving duplicated
-# scan traffic; below it V8 exposes the missing independent value tiles.  Both
-# schedules retain the proven K16/eight-warp split.
+# scan traffic even for short sequences; below it V8 exposes the missing
+# independent value tiles.  Both schedules retain the proven K16/eight-warp
+# split.
 _K_SPLIT_V16_MIN_BATCH_HEADS = 12
 # Once the ordered K-split scan has at least 32 chunks but no more than one
 # canonical B1/H16 grid, its 128 CTAs underfill the 188-SM target and amplify
@@ -77,17 +77,15 @@ _MAX_CUTE_TENSOR_BYTES = 1 << 32
 # specialization used below 32 chunks has an explicit K-tail stage.
 _INFERENCE_ALGEBRA_MIN_CHUNKS = 3
 _TRAINING_ALGEBRA_MIN_CHUNKS = 32
-assert _K_SPLIT_LONG_VALUE_TILE == _CHUNK_SIZE
+assert _K_SPLIT_FILLED_VALUE_TILE == _CHUNK_SIZE
 
 
-def _select_k_split_value_tile(batch: int, heads: int, n_chunks: int) -> int:
-    """Choose the value tile without changing the eight-warp K split."""
+def _select_k_split_value_tile(batch: int, heads: int) -> int:
+    """Choose V8 for grid coverage or V16 to reduce duplicated scan traffic."""
 
-    if n_chunks < _K_SPLIT_LONG_MIN_CHUNKS:
-        return _K_SPLIT_VALUE_TILE
     if batch * heads < _K_SPLIT_V16_MIN_BATCH_HEADS:
         return _K_SPLIT_VALUE_TILE
-    return _K_SPLIT_LONG_VALUE_TILE
+    return _K_SPLIT_FILLED_VALUE_TILE
 
 
 def _select_shuffle_decay(batch: int, heads: int, scan_chunks: int) -> bool:
@@ -1113,7 +1111,7 @@ def _compile_chunk_forward(
     aux_dtype = input_dtype if compact_aux or compact_backward_aux else f32
     u_dtype = f32 if compact_backward_aux else aux_dtype
     boundary_dtype = input_dtype if compact_state_boundaries else f32
-    k_split_value_tile = _select_k_split_value_tile(batch, heads, n_chunks)
+    k_split_value_tile = _select_k_split_value_tile(batch, heads)
 
     return cute.compile(
         _launch_chunk_forward,
@@ -1323,11 +1321,29 @@ def chunk_forward(
         q_effective = torch.empty(q.shape, device=q.device, dtype=q.dtype)
     k_tail = torch.empty(q.shape, device=q.device, dtype=aux_dtype)
     decay_end = torch.empty((batch, n_chunks, heads, key_dim), device=q.device, dtype=torch.float32)
-    aqk = torch.empty(
-        (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE),
-        device=q.device,
-        dtype=aux_dtype,
-    )
+    # The rearranged full-chunk inference path never publishes or reloads
+    # A_qk: preparation folds A_qk @ Y and A_qk @ U into Q-effective and the
+    # output bias before the ordered scan.  Alias the dead argument to the
+    # already allocated output and avoid a workspace allocation that grows
+    # linearly with sequence length.
+    aqk_is_unused = use_algebra and not store_forward_aux and full_chunks
+    if aqk_is_unused:
+        aqk = output.as_strided(
+            (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE),
+            (
+                n_chunks * heads * _CHUNK_SIZE * _CHUNK_SIZE,
+                heads * _CHUNK_SIZE * _CHUNK_SIZE,
+                _CHUNK_SIZE * _CHUNK_SIZE,
+                _CHUNK_SIZE,
+                1,
+            ),
+        )
+    else:
+        aqk = torch.empty(
+            (batch, n_chunks, heads, _CHUNK_SIZE, _CHUNK_SIZE),
+            device=q.device,
+            dtype=aux_dtype,
+        )
     state_boundaries = None
     if return_aux:
         state_boundaries = torch.empty(

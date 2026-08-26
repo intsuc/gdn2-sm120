@@ -232,7 +232,11 @@ Forward-only BF16 calls use the rearranged output identity from three full
 chunks onward, moving the independent A-qk products out of the ordered state
 scan. The WY preparation skips unused upper-triangular products and balances
 causal rows across warps, while the ordered scan uses bank-aware Y/Q and
-residual shared-memory layouts and omits its redundant final prefetch. With at
+residual shared-memory layouts and omits its redundant final prefetch. The
+forward scan selects V8 below 12 batch-heads to expose more CTAs and V16 from
+12 batch-heads onward at every sequence length to halve duplicated scan
+traffic. Full-chunk algebra inference aliases the now-dead A-qk output argument
+to the output tensor instead of allocating sequence-length workspace. With at
 least 32 full chunks and at most 16 batch-heads, each warp broadcasts its local
 decay rows and overlaps the state multiply with the required residual barrier.
 When training contains at least 32 full chunks, including a sequence

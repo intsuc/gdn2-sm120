@@ -58,10 +58,10 @@ The chunk forward uses a BT=16 compact-WY decomposition:
    batch-heads, each warp instead loads its sixteen local decay rows,
    broadcasts them through shuffles, and overlaps state decay with the
    required residual-visibility barrier.
-   With `ceil(T / 16) < 32` it uses an eight-column value tile (V8). From 32
-   chunks onward, the launcher keeps V8 when `batch * heads < 12`, exposing 16
-   CTAs per batch/head so a small grid can fill the 188 SMs. From 12
-   batch-heads onward it selects V16, whose eight CTAs per batch/head halve
+   The launcher keeps an eight-column value tile (V8) when `batch * heads < 12`,
+   exposing 16 CTAs per batch/head so a small grid can fill the 188 SMs. From 12
+   batch-heads onward it selects V16 at every sequence length; the filled grid
+   no longer needs the extra CTAs, and eight wider CTAs per batch/head halve
    duplicated scan traffic. Both schedules keep the same eight-warp K16 split
    and use one allocation with separate Y/Q planes. Algebraic V8 uses a separate
    K-tail tile because its smaller state staging allocation cannot safely hold
@@ -81,12 +81,15 @@ O = Q_gamma S + A_qk R
 ```
 
 moves the two `A_qk` products into the independent chunk-preparation CTAs and
-removes `A_qk @ R` from the sequential state scan. The V8 form is profitable
-from the public selector's first complete three-chunk shape; the independent
-V16 crossover remains at 32 chunks. The scan pipelines the next Y/Q tile and
-the current K-tail tile through 128-bit `cp.async`, reusing shared state staging
-after its register load and draining the final K-tail without a redundant Y/Q
-prefetch. FP16 retains the original expression to avoid overflow
+removes `A_qk @ R` from the sequential state scan. It is profitable from the
+public selector's first complete three-chunk shape and uses the same grid-aware
+V8/V16 choice as the original expression. The scan pipelines the next Y/Q tile
+and the current K-tail tile through 128-bit `cp.async`, reusing shared state
+staging after its register load and draining the final K-tail without a
+redundant Y/Q prefetch. For a full-chunk inference call, A-qk has no use after
+those two local products, so its dead kernel argument aliases an output view
+instead of allocating sequence-length global workspace. FP16 retains the
+original expression to avoid overflow
 in an intermediate that would cancel algebraically. BF16 training keeps its
 measured 32-chunk crossover: the rearranged expression requires a temporary
 compact Q-effective scratch consumed only by the state scan, while raw Q-gamma
