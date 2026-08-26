@@ -238,9 +238,11 @@ residual shared-memory layouts and omits its redundant final prefetch. The
 forward scan selects V8 below 12 batch-heads to expose more CTAs and V16 from
 12 batch-heads onward at every sequence length to halve duplicated scan
 traffic. Full-chunk algebra inference aliases the now-dead A-qk output argument
-to the output tensor instead of allocating sequence-length workspace. With at
-least 32 full chunks and at most 16 batch-heads, each warp broadcasts its local
-decay rows and overlaps the state multiply with the required residual barrier.
+to the output tensor instead of allocating sequence-length workspace. From four
+through 32 full chunks, scans with at most 64 batch-heads broadcast each warp's
+local decay rows and overlap the state multiply with the required residual
+barrier; beyond 32 chunks, this shuffle schedule is limited to at most 16
+batch-heads. Other grids cache one shared decay vector per CTA.
 When training contains at least 32 full chunks, including a sequence
 with a partial tail, that scan consumes a temporary compact Q-effective
 scratch while preserving raw Q-gamma and A-qk checkpoint bits for backward.
@@ -285,7 +287,7 @@ output buffers, and explicit in-place recurrent state updates. In the measured
 B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at all 33 sampled lengths through T=32768. Chunk backward remains faster for
 all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
-narrowest forward and backward margins are 1.36x at B1/T8192 and
+narrowest forward and backward margins are 1.361x at B1/T8192 and
 1.09x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
 because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
 byte-address range. Token forward is measured with the same fixed H16 and

@@ -58,13 +58,15 @@ _K_SPLIT_FILLED_VALUE_TILE = 16
 # independent value tiles.  Both schedules retain the proven K16/eight-warp
 # split.
 _K_SPLIT_V16_MIN_BATCH_HEADS = 12
-# Once the ordered K-split scan has at least 32 chunks but no more than one
-# canonical B1/H16 grid, its 128 CTAs underfill the 188-SM target and amplify
-# per-chunk shared-memory overhead.  Broadcasting each warp's local decay
-# rows is measurably faster there.  Filled multi-batch grids retain the
-# CTA-shared vector, which wins around the shorter crossover shapes.
-_SHUFFLE_DECAY_MIN_CHUNKS = 32
-_SHUFFLE_DECAY_MAX_BATCH_HEADS = 16
+# Broadcasting each warp's local decay rows removes a CTA-wide shared-memory
+# round trip and lets state decay overlap the residual publication barrier.
+# It wins from four chunks through the short V16 scan for the canonical grids,
+# and remains preferable for long underfilled grids.  Longer filled grids keep
+# the CTA-shared vector to avoid duplicating global decay traffic.
+_SHUFFLE_DECAY_MIN_CHUNKS = 4
+_SHUFFLE_DECAY_SHORT_MAX_CHUNKS = 32
+_SHUFFLE_DECAY_SHORT_MAX_BATCH_HEADS = 64
+_SHUFFLE_DECAY_LONG_MAX_BATCH_HEADS = 16
 # Some vectorized CuTe copies lower tensor byte offsets to 32-bit arithmetic.
 # Reject saved boundary tensors outside the full unsigned address range before
 # launching a kernel; callers must reduce B, T, or H for those training shapes.
@@ -91,8 +93,13 @@ def _select_k_split_value_tile(batch: int, heads: int) -> int:
 def _select_shuffle_decay(batch: int, heads: int, scan_chunks: int) -> bool:
     """Use warp-broadcast decay while its saved shared traffic pays off."""
 
+    batch_heads = batch * heads
     return scan_chunks >= _SHUFFLE_DECAY_MIN_CHUNKS and (
-        batch * heads <= _SHUFFLE_DECAY_MAX_BATCH_HEADS
+        batch_heads <= _SHUFFLE_DECAY_LONG_MAX_BATCH_HEADS
+        or (
+            scan_chunks <= _SHUFFLE_DECAY_SHORT_MAX_CHUNKS
+            and batch_heads <= _SHUFFLE_DECAY_SHORT_MAX_BATCH_HEADS
+        )
     )
 
 

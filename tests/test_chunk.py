@@ -66,11 +66,14 @@ def test_select_k_split_value_tile(batch: int, heads: int, expected: int) -> Non
 @pytest.mark.parametrize(
     ("batch", "heads", "n_chunks", "expected"),
     [
-        pytest.param(1, 16, 31, False, id="before-long-scan"),
-        pytest.param(1, 16, 32, True, id="underfilled-long-scan"),
+        pytest.param(1, 16, 3, False, id="before-short-scan"),
+        pytest.param(1, 16, 4, True, id="underfilled-short-scan"),
         pytest.param(1, 8, 512, True, id="smaller-underfilled-grid"),
-        pytest.param(1, 17, 32, False, id="first-filled-grid"),
-        pytest.param(2, 16, 32, False, id="filled-multi-batch-grid"),
+        pytest.param(1, 17, 32, True, id="short-filled-grid"),
+        pytest.param(2, 16, 32, True, id="short-multi-batch-grid"),
+        pytest.param(4, 16, 32, True, id="largest-short-canonical-grid"),
+        pytest.param(1, 65, 32, False, id="beyond-short-grid-limit"),
+        pytest.param(4, 16, 33, False, id="filled-grid-after-short-scan"),
         pytest.param(4, 16, 512, False, id="large-filled-grid"),
     ],
 )
@@ -356,19 +359,22 @@ def test_chunk_forward_long_algebra_maps_batches_and_heads(batch: int, heads: in
 
 @pytest.mark.cuda
 @pytest.mark.parametrize(
-    ("time", "dtype"),
+    ("time", "dtype", "batch", "heads"),
     [
-        pytest.param(19, torch.bfloat16, id="bf16-partial-tail"),
-        pytest.param(64, torch.float16, id="fp16-legacy-algebra"),
+        pytest.param(19, torch.bfloat16, 1, 12, id="bf16-partial-tail"),
+        pytest.param(64, torch.float16, 1, 12, id="fp16-legacy-algebra"),
+        pytest.param(65, torch.bfloat16, 2, 16, id="broadcast-decay-partial-tail"),
     ],
 )
 def test_chunk_forward_short_v16_filled_grid_matches_reference(
     time: int,
     dtype: torch.dtype,
+    batch: int,
+    heads: int,
 ) -> None:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0):
         pytest.skip("requires SM120")
-    args = _inputs(time, dtype, heads=12, normalized_qk=True)
+    args = _inputs(time, dtype, batch=batch, heads=heads, normalized_qk=True)
     output, final_state = chunk_forward(*args[:6], args[6], scale=0.125)
     expected_output, expected_state = chunkwise_forward_reference(
         *args[:6], args[6], scale=0.125, chunk_size=16

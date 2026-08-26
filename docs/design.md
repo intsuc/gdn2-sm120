@@ -53,11 +53,13 @@ The chunk forward uses a BT=16 compact-WY decomposition:
 3. warp-local FP32 results are reduced through shared memory. Y/Q partials use
    separate contiguous planes and the residual MMA tile has an aligned padded
    stride, avoiding their bank-conflicted layouts. Full-chunk paths stage Y/Q
-   with 128-bit `cp.async` copies. Filled grids cache the 128-element decay
-   vector once per CTA. With at least 32 full chunks and at most 16
-   batch-heads, each warp instead loads its sixteen local decay rows,
-   broadcasts them through shuffles, and overlaps state decay with the
-   required residual-visibility barrier.
+   with 128-bit `cp.async` copies. The shared-decay schedule caches the
+   128-element vector once per CTA. Starting at four full chunks, scans through
+   32 chunks use a shuffle schedule when `batch * heads <= 64`; beyond 32
+   chunks, only grids with `batch * heads <= 16` retain it. In that schedule,
+   each warp loads its sixteen local decay rows, broadcasts them through
+   shuffles, and overlaps state decay with the required residual-visibility
+   barrier. All other grids use the shared vector.
    The launcher keeps an eight-column value tile (V8) when `batch * heads < 12`,
    exposing 16 CTAs per batch/head so a small grid can fill the 188 SMs. From 12
    batch-heads onward it selects V16 at every sequence length; the filled grid
@@ -335,9 +337,10 @@ not representative of steady-state latency.
 Chunk-forward tensor layouts and preparation are shape-specialized, while the
 full-chunk inter-state scan uses a runtime chunk loop. The state dependency is
 still sequential across chunks, but the rearranged long-BF16 pipeline removes
-one product from that critical path. Its underfilled long-grid specialization
-also removes the shared decay-vector round trip and remains faster than the
-official path through the longest measured sequence, T=32768.
+one product from that critical path. Its piecewise decay selector removes the
+shared-vector round trip where the warp-broadcast schedule is profitable and
+remains faster than the official path through the longest measured sequence,
+T=32768.
 
 ## Primary references
 
