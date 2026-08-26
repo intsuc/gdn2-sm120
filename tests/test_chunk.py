@@ -7,6 +7,7 @@ import gdn2_sm120.chunk as chunk_module
 from gdn2_sm120.chunk import (
     _MAX_CUTE_TENSOR_BYTES,
     _select_k_split_value_tile,
+    _select_shuffle_decay,
     _state_boundary_storage_bytes,
     chunk_forward,
 )
@@ -60,6 +61,26 @@ def _inputs(
 )
 def test_select_k_split_value_tile(batch: int, heads: int, n_chunks: int, expected: int) -> None:
     assert _select_k_split_value_tile(batch, heads, n_chunks) == expected
+
+
+@pytest.mark.parametrize(
+    ("batch", "heads", "n_chunks", "expected"),
+    [
+        pytest.param(1, 16, 31, False, id="before-long-scan"),
+        pytest.param(1, 16, 32, True, id="underfilled-long-scan"),
+        pytest.param(1, 8, 512, True, id="smaller-underfilled-grid"),
+        pytest.param(1, 17, 32, False, id="first-filled-grid"),
+        pytest.param(2, 16, 32, False, id="filled-multi-batch-grid"),
+        pytest.param(4, 16, 512, False, id="large-filled-grid"),
+    ],
+)
+def test_select_shuffle_decay(
+    batch: int,
+    heads: int,
+    n_chunks: int,
+    expected: bool,
+) -> None:
+    assert _select_shuffle_decay(batch, heads, n_chunks) is expected
 
 
 def test_state_boundary_storage_identifies_four_gib_address_limit() -> None:
@@ -233,14 +254,15 @@ def test_chunk_forward_selects_mode_specific_algebra_threshold(
     compile_flags = []
 
     def compile_stub(*args):
-        compile_flags.append((args[-2], args[-1]))
+        compile_flags.append((args[-3], args[-2], args[-1]))
         return lambda *runtime_args: None
 
     monkeypatch.setattr(chunk_module, "_compile_chunk_forward", compile_stub)
     args = _inputs(time, dtype, heads=1)
     chunk_forward(*args[:6], args[6], scale=0.125, return_aux=return_aux)
 
-    assert compile_flags == [(expected_use_algebra, return_aux)]
+    expected_shuffle_decay = _select_shuffle_decay(1, 1, time // 16)
+    assert compile_flags == [(expected_use_algebra, return_aux, expected_shuffle_decay)]
 
 
 @pytest.mark.cuda

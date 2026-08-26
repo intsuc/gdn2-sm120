@@ -58,6 +58,13 @@ _K_SPLIT_LONG_MIN_CHUNKS = 32
 # scan traffic; below it V8 exposes the missing independent value tiles.  Both
 # schedules retain the proven K16/eight-warp split.
 _K_SPLIT_V16_MIN_BATCH_HEADS = 12
+# Once the ordered K-split scan has at least 32 chunks but no more than one
+# canonical B1/H16 grid, its 128 CTAs underfill the 188-SM target and amplify
+# per-chunk shared-memory overhead.  Broadcasting each warp's local decay
+# rows is measurably faster there.  Filled multi-batch grids retain the
+# CTA-shared vector, which wins around the shorter crossover shapes.
+_SHUFFLE_DECAY_MIN_CHUNKS = 32
+_SHUFFLE_DECAY_MAX_BATCH_HEADS = 16
 # Some vectorized CuTe copies lower tensor byte offsets to 32-bit arithmetic.
 # Reject saved boundary tensors outside the full unsigned address range before
 # launching a kernel; callers must reduce B, T, or H for those training shapes.
@@ -81,6 +88,14 @@ def _select_k_split_value_tile(batch: int, heads: int, n_chunks: int) -> int:
     if batch * heads < _K_SPLIT_V16_MIN_BATCH_HEADS:
         return _K_SPLIT_VALUE_TILE
     return _K_SPLIT_LONG_VALUE_TILE
+
+
+def _select_shuffle_decay(batch: int, heads: int, scan_chunks: int) -> bool:
+    """Use warp-broadcast decay while its saved shared traffic pays off."""
+
+    return scan_chunks >= _SHUFFLE_DECAY_MIN_CHUNKS and (
+        batch * heads <= _SHUFFLE_DECAY_MAX_BATCH_HEADS
+    )
 
 
 def _state_boundary_storage_bytes(
@@ -430,6 +445,7 @@ def _inter_chunk_k_split_mma_kernel(
     store_state_boundaries: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
     checkpoint_residual: cutlass.Constexpr,
+    shuffle_decay: cutlass.Constexpr,
     value_tile: cutlass.Constexpr,
     tiled_mma: cute.TiledMma,
     s_a_layout: cute.Layout,
@@ -475,9 +491,10 @@ def _inter_chunk_k_split_mma_kernel(
         )
     s_residual = allocator.allocate_tensor(operand_type, s_residual_layout, byte_alignment=1024)
     s_q_total = allocator.allocate_tensor(cutlass.Float32, s_q_total_layout, byte_alignment=1024)
-    s_decay = allocator.allocate_tensor(
-        cutlass.Float32, cute.make_layout((_KEY_DIM,), stride=(1,)), byte_alignment=16
-    )
+    if cutlass.const_expr(not shuffle_decay):
+        s_decay = allocator.allocate_tensor(
+            cutlass.Float32, cute.make_layout((_KEY_DIM,), stride=(1,)), byte_alignment=16
+        )
     s_a = s_a_all[warp, None, None]
     s_q = s_q_all[warp, None, None]
     s_state = s_state_all[warp, None, None]
@@ -671,6 +688,16 @@ def _inter_chunk_k_split_mma_kernel(
             t_cr_b[None, None, 0],
             t_cr_q,
         )
+        if cutlass.const_expr(shuffle_decay):
+            # Each warp needs only the sixteen decay values for its persistent
+            # key rows. Broadcast a coalesced lane load instead of materializing
+            # and repeatedly reading a CTA-wide shared-memory vector.
+            lane_decay = decay_end[
+                batch,
+                chunk,
+                head,
+                key_start + (lane & 15),
+            ].to(cutlass.Float32)
         if cutlass.const_expr(use_algebra):  # noqa: SIM102
             if chunk + 1 < n_chunks:
                 next_chunk = chunk + 1
@@ -717,15 +744,22 @@ def _inter_chunk_k_split_mma_kernel(
                 ).to(output.element_type)
             else:
                 s_q_total[row, value_local] = q_total
-        if tidx < _KEY_DIM:
-            s_decay[tidx] = decay_end[batch, chunk, head, tidx]
-        cute.arch.sync_threads()
 
-        # All warps consume the shared decay vector before warp zero diverges
-        # for the output-only product.  No end-of-chunk barrier is needed.
-        for state_element in cutlass.range_constexpr(cute.size(t_cr_state.shape)):
-            key_local = t_cp_state[state_element][0]
-            t_cr_state[state_element] = t_cr_state[state_element] * s_decay[key_start + key_local]
+        if cutlass.const_expr(shuffle_decay):
+            # Do the independent state decay while slower warps finish
+            # publishing residual elements. The following CTA barrier remains
+            # necessary to make the complete tile visible to every warp.
+            for state_element in cutlass.range_constexpr(cute.size(t_cr_state.shape)):
+                key_local = t_cp_state[state_element][0]
+                t_cr_state[state_element] *= cute.arch.shuffle_sync(lane_decay, key_local)
+            cute.arch.sync_threads()
+        else:
+            if tidx < _KEY_DIM:
+                s_decay[tidx] = decay_end[batch, chunk, head, tidx]
+            cute.arch.sync_threads()
+            for state_element in cutlass.range_constexpr(cute.size(t_cr_state.shape)):
+                key_local = t_cp_state[state_element][0]
+                t_cr_state[state_element] *= s_decay[key_start + key_local]
 
         # AQK @ residual is only one MMA atom.  Warp zero adds it to the
         # reduced Q partial and writes the chunk output while other warps can
@@ -841,6 +875,7 @@ def _launch_chunk_forward(
     store_state_boundaries: cutlass.Constexpr,
     use_algebra: cutlass.Constexpr,
     store_forward_aux: cutlass.Constexpr,
+    shuffle_decay: cutlass.Constexpr,
     k_split_value_tile: cutlass.Constexpr,
     stream: cuda.CUstream,
 ):
@@ -961,6 +996,7 @@ def _launch_chunk_forward(
             store_state_boundaries,
             use_algebra,
             checkpoint_residual,
+            shuffle_decay,
             value_tile,
             tiled_mma,
             s_a_layout,
@@ -1056,6 +1092,7 @@ def _compile_chunk_forward(
     store_state_boundaries: bool,
     use_algebra: bool,
     store_forward_aux: bool,
+    shuffle_decay: bool,
 ):
     """Compile once per static tensor layout; runtime calls bypass DSL tracing."""
 
@@ -1104,6 +1141,7 @@ def _compile_chunk_forward(
         store_state_boundaries,
         use_algebra,
         store_forward_aux,
+        shuffle_decay,
         k_split_value_tile,
         make_fake_stream(),
         options="--enable-tvm-ffi",
@@ -1210,6 +1248,7 @@ def chunk_forward(
     )
     use_algebra = q.dtype == torch.bfloat16 and time // _CHUNK_SIZE >= algebra_min_chunks
     store_forward_aux = return_aux
+    shuffle_decay = _select_shuffle_decay(batch, heads, time // _CHUNK_SIZE)
     aux_dtype = q.dtype if compact_aux or compact_backward_aux else torch.float32
     u_dtype = torch.float32 if compact_backward_aux else aux_dtype
     if return_aux and (out is not None or final_state_out is not None):
@@ -1315,6 +1354,7 @@ def chunk_forward(
             return_aux,
             use_algebra,
             store_forward_aux,
+            shuffle_decay,
         )
         stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)
         compiled(

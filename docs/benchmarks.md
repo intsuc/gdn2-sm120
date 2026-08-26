@@ -67,13 +67,13 @@ CuTe-versus-official comparison.
 | chunk forward | 1 | 64 | 16 | 40 / 300 | 35.3 | 183.7 | **5.20x** | 1.36e-3 |
 | chunk forward | 1 | 128 | 16 | 40 / 300 | 39.4 | 181.9 | **4.62x** | 1.60e-3 |
 | chunk forward | 1 | 256 | 16 | 40 / 300 | 49.6 | 183.6 | **3.70x** | 1.39e-3 |
-| chunk forward | 1 | 512 | 16 | 40 / 300 | 59.9 | 181.6 | **3.03x** | 1.43e-3 |
-| chunk forward | 1 | 1024 | 16 | 40 / 300 | 92.6 | 183.4 | **1.98x** | 1.37e-3 |
-| chunk forward | 1 | 2048 | 16 | 40 / 300 | 154.2 | 236.6 | **1.53x** | 1.40e-3 |
-| chunk forward | 1 | 4096 | 16 | 20 / 100 | 411.7 | 477.0 | **1.16x** | 1.38e-3 |
-| chunk forward | 1 | 8192 | 16 | 20 / 100 | 897.0 | 1033.3 | **1.15x** | 1.41e-3 |
-| chunk forward | 1 | 16384 | 16 | 10 / 50 | 1740.9 | 2115.5 | **1.22x** | 1.50e-3 |
-| chunk forward | 1 | 32768 | 16 | 10 / 50 | 3440.5 | 4234.9 | **1.23x** | 1.82e-3 |
+| chunk forward | 1 | 512 | 16 | 40 / 300 | 55.7 | 182.9 | **3.28x** | 1.43e-3 |
+| chunk forward | 1 | 1024 | 16 | 40 / 300 | 84.4 | 182.9 | **2.17x** | 1.37e-3 |
+| chunk forward | 1 | 2048 | 16 | 40 / 300 | 137.8 | 236.7 | **1.72x** | 1.40e-3 |
+| chunk forward | 1 | 4096 | 16 | 20 / 100 | 374.4 | 477.1 | **1.27x** | 1.38e-3 |
+| chunk forward | 1 | 8192 | 16 | 20 / 100 | 793.0 | 1036.4 | **1.31x** | 1.41e-3 |
+| chunk forward | 1 | 16384 | 16 | 10 / 50 | 1568.8 | 2115.3 | **1.35x** | 1.50e-3 |
+| chunk forward | 1 | 32768 | 16 | 10 / 50 | 3081.7 | 4234.1 | **1.37x** | 1.82e-3 |
 | chunk forward | 2 | 16 | 16 | 40 / 300 | 24.1 | 180.3 | **7.49x** | 1.55e-3 |
 | chunk forward | 2 | 64 | 16 | 40 / 300 | 37.4 | 182.2 | **4.87x** | 1.36e-3 |
 | chunk forward | 2 | 128 | 16 | 40 / 300 | 45.6 | 182.9 | **4.01x** | 1.62e-3 |
@@ -154,7 +154,7 @@ CuTe-versus-official comparison.
 | token forward | 4 | 128 | 16 | 25 / 100 | 70.7 | 132.6 | **1.88x** | 1.12e-3 |
 
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
-longest-sequence speedups are 1.23x, 1.46x, and 1.52x respectively. Backward is
+longest-sequence speedups are 1.37x, 1.46x, and 1.52x respectively. Backward is
 also ahead at every supported measured point: all 11 B1 and B2 lengths and all
 10 B4 lengths through T=16384. The narrowest measured margin is 1.0902x at
 B4/T1024.
@@ -212,6 +212,35 @@ additional points in the canonical publication schema. Unless noted otherwise,
 they use the same workstation, normalized BF16 Q/K, FP32 `g`/state, and
 `scale=0.125` as the canonical suite. Medians and minima are synchronized CUDA
 event microseconds.
+
+### Forward decay broadcast in the ordered scan
+
+After the prior shared-memory work below, the ordered inter-chunk scan still
+accounted for 596.246 us, or 68.1% of the 875.573 us B1/T8192/H16 kernel sum.
+Every chunk materialized its 128-element decay vector in shared memory, waited
+at a CTA barrier, and then reloaded the sixteen relevant rows into each warp's
+persistent state fragment. The barrier itself cannot be removed because it
+also makes the independently produced residual tile visible to every warp.
+
+The underfilled long-scan specialization now loads each warp's sixteen decay
+rows directly, broadcasts them with warp shuffles, and performs the independent
+state decay before arriving at the residual-visibility barrier. This removes
+the shared vector and overlaps the decay arithmetic with residual producers
+that are still finishing. A same-shape Nsight capture reduced the scan median
+to 501.082 us (-16.0%) while preparation remained 278.492 us; the two-kernel
+sum fell to 779.574 us (-11.0%). Same-process alternating A/B calls were
+bit-identical. Because filled multi-batch grids did not improve consistently,
+the selector uses this schedule only with at least 32 full chunks and at most
+16 batch-heads.
+
+Representative refreshed public-call rows are:
+
+| B | T | Previous CuTe | Current CuTe | CuTe change | Official | Speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 512 | 59.904 | 55.744 | **-6.9%** | 182.944 | **3.28x** |
+| 1 | 2048 | 154.176 | 137.760 | **-10.6%** | 236.736 | **1.72x** |
+| 1 | 8192 | 897.040 | 793.024 | **-11.6%** | 1036.368 | **1.31x** |
+| 1 | 32768 | 3440.544 | 3081.712 | **-10.4%** | 4234.096 | **1.37x** |
 
 ### Forward prepare and shared-memory scan
 
@@ -504,9 +533,10 @@ between old and new measurements.
 ## Interpretation
 
 The optimization goal is met across every supported measured chunk point.
-Chunk forward is faster at all 33 B1/B2/B4 lengths through T=32768. Backward
-is faster at all 11 B1 and B2 lengths and all 10 measured B4 lengths through
-T=16384; its narrowest margin is 1.0902x at B4/T1024. B4/T32768 is outside
+Chunk forward is faster at all 33 B1/B2/B4 lengths through T=32768; its
+narrowest margin is 1.2743x at B1/T4096. Backward is faster at all 11 B1 and
+B2 lengths and all 10 measured B4 lengths through T=16384; its narrowest
+margin is 1.0902x at B4/T1024. B4/T32768 is outside
 the current CuTe per-launch address range and is excluded. Token forward is
 measured over the same fixed-H16 B1/B2/B4 batch matrix and is faster at all 24
 points through T=128.

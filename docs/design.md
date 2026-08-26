@@ -41,9 +41,12 @@ The chunk forward uses a BT=16 compact-WY decomposition:
    evaluate the dense products with `m16n8k16` warp MMA;
 3. warp-local FP32 results are reduced through shared memory. Y/Q partials use
    separate contiguous planes and the residual MMA tile has an aligned padded
-   stride, avoiding their bank-conflicted layouts. Full-chunk paths
-   stage Y/Q with 128-bit `cp.async` copies and cache the 128-element decay
-   vector once per CTA rather than loading it independently from every warp.
+   stride, avoiding their bank-conflicted layouts. Full-chunk paths stage Y/Q
+   with 128-bit `cp.async` copies. Filled grids cache the 128-element decay
+   vector once per CTA. With at least 32 full chunks and at most 16
+   batch-heads, each warp instead loads its sixteen local decay rows,
+   broadcasts them through shuffles, and overlaps state decay with the
+   required residual-visibility barrier.
    With `ceil(T / 16) < 32` it uses an eight-column value tile (V8). From 32
    chunks onward, the launcher keeps V8 when `batch * heads < 12`, exposing 16
    CTAs per batch/head so a small grid can fill the 188 SMs. From 12
@@ -305,8 +308,9 @@ not representative of steady-state latency.
 Chunk-forward tensor layouts and preparation are shape-specialized, while the
 full-chunk inter-state scan uses a runtime chunk loop. The state dependency is
 still sequential across chunks, but the rearranged long-BF16 pipeline removes
-one product from that critical path and remains faster than the official path
-through the longest measured sequence, T=32768.
+one product from that critical path. Its underfilled long-grid specialization
+also removes the shared decay-vector round trip and remains faster than the
+official path through the longest measured sequence, T=32768.
 
 ## Primary references
 
