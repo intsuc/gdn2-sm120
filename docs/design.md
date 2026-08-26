@@ -138,7 +138,9 @@ subject to FP32 rounding. The hardware reciprocal is flush-to-zero, so both
 reverse-reconstruction contract. The public primitive requires finite,
 non-positive `g` and every BT=16 prefix sum to remain safely above
 `ln(FLT_MIN)`, approximately `-87.34`; model log-decays remain far inside that
-range.
+range. The value-tiled path also computes one Newton-refined reciprocal of
+`1 - e.T @ k` and reuses it for both V4 halves instead of issuing two precise
+FP32 divisions.
 
 Except for the fused T=1 path, the short final-state-only backward assigns one
 V8 value tile to each one-warp CTA. K-side inputs and gate evaluation are

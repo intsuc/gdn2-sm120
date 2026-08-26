@@ -152,8 +152,10 @@ at least 64 chunk-head CTAs; smaller T=64 grids retain the chunk-local VJP.
 training checkpoints and bypass the custom autograd wrapper entirely.
 
 Below T=64, the short backward uses one-warp V8 value tiles. Its first kernel
-writes final-form `dq`/`dk`/`dg`/`dbeta` FP32 partials, leaving a sum-only
-reduction that does not reload K/beta/g or recompute `exp(g)`.
+writes final-form `dq`/`dk`/`dg`/`dbeta` FP32 partials, shares one
+Newton-refined Sherman--Morrison denominator reciprocal across its two V4
+halves, and leaves a sum-only reduction that does not reload K/beta/g or
+recompute `exp(g)`.
 
 ## Benchmark against the official Triton implementation
 
@@ -284,7 +286,7 @@ B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at all 33 sampled lengths through T=32768. Chunk backward remains faster for
 all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
 narrowest forward and backward margins are 1.36x at B1/T8192 and
-1.08x at B2/T2048, respectively. B4/T32768 backward is not benchmarked
+1.09x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
 because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
 byte-address range. Token forward is measured with the same fixed H16 and
 B1/B2/B4 batch matrix and remains faster at all 24 points through T=128. The

@@ -505,8 +505,15 @@ def _chunk_backward_value_tiled_kernel(
             y_dot_part_1 += r_value * y_value_1
 
         denominator = cutlass.Float32(1.0) - _oct_sum(denominator_part)
-        erased_value_0 = _oct_sum(y_dot_part_0) / denominator
-        erased_value_1 = _oct_sum(y_dot_part_1) / denominator
+        # Both V4 halves share the same Sherman--Morrison denominator.  One
+        # Newton-refined hardware reciprocal replaces two serialized FP32
+        # divides while retaining near-FP32 reconstruction accuracy.
+        inverse_denominator = cute.arch.rcp_approx(denominator)
+        inverse_denominator *= (
+            cutlass.Float32(2.0) - denominator * inverse_denominator
+        )
+        erased_value_0 = _oct_sum(y_dot_part_0) * inverse_denominator
+        erased_value_1 = _oct_sum(y_dot_part_1) * inverse_denominator
         update_value_0 = z_value_0 - erased_value_0
         update_value_1 = z_value_1 - erased_value_1
 

@@ -96,38 +96,38 @@ CuTe-versus-official comparison.
 | chunk forward | 4 | 8192 | 16 | 20 / 100 | 2556.0 | 3885.9 | **1.52x** | 2.06e-3 |
 | chunk forward | 4 | 16384 | 16 | 10 / 50 | 5090.3 | 7804.7 | **1.53x** | 2.22e-3 |
 | chunk forward | 4 | 32768 | 16 | 10 / 50 | 10256.2 | 15672.1 | **1.53x** | 1.83e-3 |
-| chunk backward | 1 | 16 | 16 | 40 / 300 | 106.0 | 278.1 | **2.62x** | 1.95e-3 |
-| chunk backward | 1 | 64 | 16 | 40 / 300 | 120.1 | 279.1 | **2.32x** | 2.14e-3 |
-| chunk backward | 1 | 128 | 16 | 40 / 300 | 116.7 | 281.2 | **2.41x** | 2.08e-3 |
-| chunk backward | 1 | 256 | 16 | 40 / 300 | 121.2 | 277.9 | **2.29x** | 2.44e-3 |
-| chunk backward | 1 | 512 | 16 | 40 / 300 | 132.5 | 281.7 | **2.13x** | 2.93e-3 |
-| chunk backward | 1 | 1024 | 16 | 40 / 300 | 255.0 | 400.4 | **1.57x** | 2.01e-3 |
-| chunk backward | 1 | 2048 | 16 | 40 / 300 | 553.9 | 707.5 | **1.28x** | 3.91e-3 |
-| chunk backward | 1 | 4096 | 16 | 20 / 100 | 1228.2 | 1466.4 | **1.19x** | 3.91e-3 |
-| chunk backward | 1 | 8192 | 16 | 20 / 100 | 2580.5 | 3131.3 | **1.21x** | 2.93e-3 |
-| chunk backward | 1 | 16384 | 16 | 10 / 50 | 5264.3 | 6356.5 | **1.21x** | 3.91e-3 |
-| chunk backward | 1 | 32768 | 16 | 10 / 50 | 10613.1 | 12592.6 | **1.19x** | 3.91e-3 |
-| chunk backward | 2 | 16 | 16 | 40 / 300 | 111.0 | 279.0 | **2.51x** | 2.44e-3 |
-| chunk backward | 2 | 64 | 16 | 40 / 300 | 121.2 | 279.5 | **2.31x** | 2.14e-3 |
-| chunk backward | 2 | 128 | 16 | 40 / 300 | 121.1 | 279.4 | **2.31x** | 2.93e-3 |
-| chunk backward | 2 | 256 | 16 | 40 / 300 | 131.6 | 280.1 | **2.13x** | 2.44e-3 |
-| chunk backward | 2 | 512 | 16 | 40 / 300 | 239.6 | 391.2 | **1.63x** | 3.91e-3 |
-| chunk backward | 2 | 1024 | 16 | 40 / 300 | 517.2 | 644.1 | **1.25x** | 2.44e-3 |
-| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1212.6 | 1308.7 | **1.08x** | 2.93e-3 |
-| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2435.8 | 2780.1 | **1.14x** | 3.91e-3 |
-| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5043.6 | 5740.2 | **1.14x** | 3.91e-3 |
-| chunk backward | 2 | 16384 | 16 | 10 / 50 | 10187.2 | 11412.9 | **1.12x** | 3.91e-3 |
-| chunk backward | 2 | 32768 | 16 | 10 / 50 | 20464.5 | 23016.4 | **1.12x** | 3.91e-3 |
-| chunk backward | 4 | 16 | 16 | 40 / 300 | 131.4 | 278.1 | **2.12x** | 2.44e-3 |
-| chunk backward | 4 | 64 | 16 | 40 / 300 | 129.5 | 280.2 | **2.16x** | 3.91e-3 |
-| chunk backward | 4 | 128 | 16 | 40 / 300 | 131.6 | 278.0 | **2.11x** | 3.91e-3 |
-| chunk backward | 4 | 256 | 16 | 40 / 300 | 231.6 | 392.1 | **1.69x** | 3.91e-3 |
-| chunk backward | 4 | 512 | 16 | 40 / 300 | 504.7 | 626.6 | **1.24x** | 3.91e-3 |
-| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1144.9 | 1252.2 | **1.09x** | 3.91e-3 |
-| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2378.8 | 2713.6 | **1.14x** | 3.91e-3 |
-| chunk backward | 4 | 4096 | 16 | 20 / 100 | 4875.0 | 5514.1 | **1.13x** | 3.91e-3 |
-| chunk backward | 4 | 8192 | 16 | 20 / 100 | 9800.6 | 10922.8 | **1.11x** | 3.91e-3 |
-| chunk backward | 4 | 16384 | 16 | 10 / 50 | 19672.0 | 22178.2 | **1.13x** | 3.91e-3 |
+| chunk backward | 1 | 16 | 16 | 40 / 300 | 101.9 | 278.5 | **2.73x** | 1.95e-3 |
+| chunk backward | 1 | 64 | 16 | 40 / 300 | 119.1 | 281.1 | **2.36x** | 2.14e-3 |
+| chunk backward | 1 | 128 | 16 | 40 / 300 | 115.3 | 279.3 | **2.42x** | 2.08e-3 |
+| chunk backward | 1 | 256 | 16 | 40 / 300 | 120.4 | 281.3 | **2.34x** | 2.44e-3 |
+| chunk backward | 1 | 512 | 16 | 40 / 300 | 132.5 | 280.2 | **2.11x** | 2.93e-3 |
+| chunk backward | 1 | 1024 | 16 | 40 / 300 | 254.9 | 398.4 | **1.56x** | 2.01e-3 |
+| chunk backward | 1 | 2048 | 16 | 40 / 300 | 553.8 | 708.6 | **1.28x** | 3.91e-3 |
+| chunk backward | 1 | 4096 | 16 | 20 / 100 | 1225.1 | 1466.3 | **1.20x** | 3.91e-3 |
+| chunk backward | 1 | 8192 | 16 | 20 / 100 | 2576.2 | 3131.3 | **1.22x** | 2.93e-3 |
+| chunk backward | 1 | 16384 | 16 | 10 / 50 | 5266.4 | 6351.3 | **1.21x** | 3.91e-3 |
+| chunk backward | 1 | 32768 | 16 | 10 / 50 | 10648.9 | 12590.8 | **1.18x** | 3.91e-3 |
+| chunk backward | 2 | 16 | 16 | 40 / 300 | 107.0 | 276.6 | **2.58x** | 2.44e-3 |
+| chunk backward | 2 | 64 | 16 | 40 / 300 | 120.6 | 279.5 | **2.32x** | 2.14e-3 |
+| chunk backward | 2 | 128 | 16 | 40 / 300 | 120.3 | 278.1 | **2.31x** | 2.93e-3 |
+| chunk backward | 2 | 256 | 16 | 40 / 300 | 131.6 | 279.1 | **2.12x** | 2.44e-3 |
+| chunk backward | 2 | 512 | 16 | 40 / 300 | 239.4 | 389.1 | **1.63x** | 3.91e-3 |
+| chunk backward | 2 | 1024 | 16 | 40 / 300 | 517.9 | 643.6 | **1.24x** | 2.44e-3 |
+| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1182.7 | 1309.6 | **1.11x** | 2.93e-3 |
+| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2466.3 | 2823.2 | **1.14x** | 3.91e-3 |
+| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5044.6 | 5744.4 | **1.14x** | 3.91e-3 |
+| chunk backward | 2 | 16384 | 16 | 10 / 50 | 10184.8 | 11423.6 | **1.12x** | 3.91e-3 |
+| chunk backward | 2 | 32768 | 16 | 10 / 50 | 20449.0 | 23036.4 | **1.13x** | 3.91e-3 |
+| chunk backward | 4 | 16 | 16 | 40 / 300 | 131.1 | 278.5 | **2.13x** | 2.44e-3 |
+| chunk backward | 4 | 64 | 16 | 40 / 300 | 129.5 | 277.2 | **2.14x** | 3.91e-3 |
+| chunk backward | 4 | 128 | 16 | 40 / 300 | 131.6 | 277.3 | **2.11x** | 3.91e-3 |
+| chunk backward | 4 | 256 | 16 | 40 / 300 | 231.5 | 391.1 | **1.69x** | 3.91e-3 |
+| chunk backward | 4 | 512 | 16 | 40 / 300 | 504.8 | 623.5 | **1.24x** | 3.91e-3 |
+| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1143.2 | 1251.2 | **1.09x** | 3.91e-3 |
+| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2379.7 | 2715.7 | **1.14x** | 3.91e-3 |
+| chunk backward | 4 | 4096 | 16 | 20 / 100 | 4868.7 | 5472.8 | **1.12x** | 3.91e-3 |
+| chunk backward | 4 | 8192 | 16 | 20 / 100 | 9806.8 | 10968.2 | **1.12x** | 3.91e-3 |
+| chunk backward | 4 | 16384 | 16 | 10 / 50 | 19669.2 | 22154.2 | **1.13x** | 3.91e-3 |
 | token forward | 1 | 1 | 16 | 25 / 100 | 13.0 | 24.9 | **1.91x** | 2.24e-8 |
 | token forward | 1 | 2 | 16 | 25 / 100 | 13.0 | 25.0 | **1.92x** | 2.98e-8 |
 | token forward | 1 | 4 | 16 | 25 / 100 | 14.8 | 26.9 | **1.81x** | 5.96e-8 |
@@ -156,12 +156,12 @@ CuTe-versus-official comparison.
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
 longest-sequence speedups are 1.40x, 1.48x, and 1.53x respectively. Backward is
 also ahead at every supported measured point: all 11 B1 and B2 lengths and all
-10 B4 lengths through T=16384. The narrowest measured margin is 1.0793x at
-B2/T2048.
+10 B4 lengths through T=16384. The narrowest measured margin is 1.0945x at
+B4/T1024.
 
 The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
 the CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
-scan. T=128 additionally enables compact BF16 checkpoints and measures 116.7 us.
+scan. T=128 additionally enables compact BF16 checkpoints and measures 115.3 us.
 The checkpointed path removes the old T=128 correctness cap. B4/T32768
 backward is unsupported and not benchmarked because one saved state-boundary
 tensor exceeds CuTe's 4-GiB per-launch byte-address range.
@@ -319,6 +319,28 @@ existing tolerances. Because `rcp_approx` is flush-to-zero, this optimized
 reconstruction assumes `exp(g)` is a normal positive FP32 value; production
 log-decays keep both `exp(g)` and its reciprocal normal finite, far from either
 subnormal boundary.
+
+### Shared Sherman--Morrison denominator reciprocal
+
+The one-warp value-tiled kernel previously issued two precise FP32 divisions
+for the same `1 - e.T @ k` denominator, one for each V4 half. It now evaluates
+one SM120 reciprocal, applies a Newton correction, and multiplies both
+numerators by the shared result. This keeps the reconstruction order and FP32
+surrounding arithmetic unchanged while removing one serialized divide per key
+and reverse token.
+
+The fresh independent-process publication rows moved as follows; the
+measurement matrix and official reference commit are unchanged.
+
+| B | T | Prior CuTe | Refreshed CuTe | Change | Validation max abs |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 16 | 105.984 | 101.888 | **-3.86%** | 1.95e-3 |
+| 2 | 16 | 110.976 | 107.040 | **-3.55%** | 2.44e-3 |
+| 4 | 16 | 131.392 | 131.072 | **-0.24%** | 2.44e-3 |
+
+The maximum official-comparison difference over the refreshed 32-point
+backward sweep remains `3.91e-3`. Longer rows dispatch to the existing
+checkpointed kernels and remain within normal process-to-process variation.
 
 ### Forward preparation and terminal-chain reciprocal
 
@@ -681,7 +703,7 @@ The optimization goal is met across every supported measured chunk point.
 Chunk forward is faster at all 33 B1/B2/B4 lengths through T=32768; its
 narrowest margin is 1.3580x at B1/T8192. Backward is faster at all 11 B1 and
 B2 lengths and all 10 measured B4 lengths through T=16384; its narrowest
-margin is 1.0793x at B2/T2048. B4/T32768 is outside
+margin is 1.0945x at B4/T1024. B4/T32768 is outside
 the current CuTe per-launch address range and is excluded. Token forward is
 measured over the same fixed-H16 B1/B2/B4 batch matrix and is faster at all 24
 points through T=128.
