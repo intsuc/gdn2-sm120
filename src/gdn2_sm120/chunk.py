@@ -200,7 +200,11 @@ def _prepare_wy_kernel(
                 k_value = k[batch, token, head, key_idx].to(cutlass.Float32)
                 q_value = q[batch, token, head, key_idx].to(cutlass.Float32)
                 beta_value = beta[batch, token, head, key_idx].to(cutlass.Float32)
-            reciprocal_gamma = cutlass.Float32(1.0) / gamma
+            # Precise FP32 division was the dominant instruction in this
+            # otherwise latency-bound per-key preparation loop.  Gamma is
+            # positive, and the SM120 reciprocal approximation stays well
+            # below the validated compact FP16/BF16 numerical tolerance.
+            reciprocal_gamma = cute.arch.rcp_approx(gamma)
             s_k_bar[token_local, key_idx] = k_value * reciprocal_gamma
             s_erase_bar[token_local, key_idx] = gamma * beta_value * k_value
             s_q_gamma[token_local, key_idx] = gamma * q_value * scale

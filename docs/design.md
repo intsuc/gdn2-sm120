@@ -18,6 +18,12 @@ o = S.T @ (scale * q)
 the Python API to avoid confusing it with the batch dimension. The arithmetic
 that updates or differentiates the state accumulates in FP32. Sequence outputs
 and sequence gradients are cast to the corresponding input dtype.
+The two latency-bound positive-gamma inversions in chunk-local WY preparation
+and the terminal compact-WY parameter chain use the SM120 approximate
+reciprocal; their surrounding factor and gradient arithmetic remain FP32.
+Neither the ordered forward nor reverse state recurrence evaluates this
+approximation, so the public numerical contract is the validated BF16/FP16
+tolerance rather than bit-exact equivalence to precise FP32 division.
 
 Gate activation and Q/K normalization intentionally sit outside the primitive.
 This makes the numerical contract small and lets the benchmark compare the
@@ -32,7 +38,8 @@ The chunk forward uses a BT=16 compact-WY decomposition:
    and solves the unit-lower-triangular WY system. Eight warps cover the sixteen
    causal-product rows in two passes, skip the unused upper-triangular products,
    and pair low/high full-chunk rows to equalize their causal work. The final
-   per-token exponential is reused as the chunk decay. The same 256 threads then
+   per-token exponential is reused as the chunk decay, and its positive inverse
+   for K-bar uses the SM120 reciprocal approximation. The same 256 threads then
    solve K/V, each keeping its 16 FP32 values private. The 256-thread CTA permits
    more resident chunks than the former 512-thread layout while retaining the
    barrier-free private solution;
@@ -159,12 +166,13 @@ compact BF16 path also folds the state-decay dot into the shared-S0 product, so
 T>=128 uses 10 launches. Dual-output S0/square products, paired K16 products,
 and producer epilogues remove redundant reads and launch boundaries.
 The large `16x128` and `16x16` products use warp MMA; the triangular transpose
-solve and gate chain accumulate in FP32. The gate chain stores one reciprocal
-gamma per token in registers and reuses it for the K and decay expressions,
-replacing three divisions with one. The boundary scan stores `dR`,
-avoiding two duplicate matrix products; compact BF16 scans round only the
-returned `dR` while keeping the ordered boundary recurrence and its precompute
-scratch in FP32.
+solve and gate chain accumulate in FP32. The terminal gate chain stores one
+approximate reciprocal of gamma per token in registers and reuses it for the K
+and decay expressions, replacing three precise divisions. This reciprocal
+feeds only parameter gradients, not the ordered d-state recurrence. The
+boundary scan stores `dR`, avoiding two duplicate matrix products; compact BF16
+scans round only the returned `dR` while keeping the ordered boundary recurrence
+and its precompute scratch in FP32.
 
 If PyTorch supplies no final-state VJP, the ordered boundary scan specializes
 `has_d_final_state=False`, initializes its persistent register state to zero,

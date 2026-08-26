@@ -1103,9 +1103,10 @@ def _compact_chain_kernel(
             inv_gamma_value = cutlass.Float32(0.0)
             if row < length:
                 token = start + row
-                inv_gamma_value = cutlass.Float32(1.0) / gamma[
-                    batch, token, head, key_idx
-                ]
+                # This reciprocal feeds only the terminal parameter VJP and
+                # is narrowed to the public gradient dtype; it is not part of
+                # the ordered d-state recurrence.
+                inv_gamma_value = cute.arch.rcp_approx(gamma[batch, token, head, key_idx])
                 k_bar_value = (
                     k[batch, token, head, key_idx].to(cutlass.Float32) * inv_gamma_value
                 )

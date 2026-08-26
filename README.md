@@ -212,6 +212,12 @@ therefore use a schedule designed for SM120 rather than a direct FROST port.
 For long BF16 training, Y, raw Q-gamma, K-tail, A-qk, and the persistent
 E/K-bar MMA operands use BF16, while the value auxiliary, chunk decay, and
 gamma remain FP32.
+The latency-bound positive-gamma inversions in forward WY preparation and the
+terminal compact-WY parameter chain use the SM120 approximate reciprocal while
+their surrounding factor and gradient arithmetic remain FP32. Neither the
+ordered forward nor reverse state recurrence evaluates this approximation;
+results follow the validated BF16/FP16 tolerance contract rather than bit-exact
+equivalence to precise FP32 division.
 Forward-only BF16 calls use the rearranged output identity from three full
 chunks onward, moving the independent A-qk products out of the ordered state
 scan. The WY preparation skips unused upper-triangular products and balances
@@ -239,8 +245,8 @@ into 12 launches. The saved forward R skips its `Y @ S0` launch and reduces the
 paired dLower product to `-tril(dZ @ R.T)`. T=64 therefore uses 11 launches,
 while full-chunk BF16 folds the state/gradient decay dot into the shared-S0
 product and uses 10 launches at `T >= 128`. The final gate chain computes one
-reciprocal gamma per token and reuses it across the K and decay gradients
-instead of issuing three divisions.
+approximate reciprocal of gamma per token and reuses it across the K and decay
+gradients instead of issuing three precise divisions.
 
 When a loss does not consume the final state, the long backward passes a
 zero-terminal specialization into the boundary scan. It initializes the
@@ -263,7 +269,7 @@ output buffers, and explicit in-place recurrent state updates. In the measured
 B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at all 33 sampled lengths through T=32768. Chunk backward remains faster for
 all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
-narrowest forward and backward margins are 1.27x at B1/T4096 and
+narrowest forward and backward margins are 1.36x at B1/T8192 and
 1.09x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
 because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
 byte-address range. Token forward is measured with the same fixed H16 and
