@@ -1123,7 +1123,10 @@ def _parallel_chunk_vjp_kernel(
                 key_data[0, cache_key] = key_value
                 key_data[1, cache_key] = beta_value * key_value
                 key_data[2, cache_key] = decay
-                key_data[3, cache_key] = cutlass.Float32(1.0) / decay
+                # Recover near-FP32 precision before reverse-state use.
+                reciprocal_decay = cute.arch.rcp_approx(decay)
+                reciprocal_decay *= cutlass.Float32(2.0) - decay * reciprocal_decay
+                key_data[3, cache_key] = reciprocal_decay
             cute.arch.sync_warp()
 
             # Output VJP is applied while the exact/reconstructed S_t remains
@@ -1279,7 +1282,10 @@ def _parallel_chunk_vjp_full_kernel(
                 key_data[0, tidx] = key_value
                 key_data[1, tidx] = beta_value * key_value
                 key_data[2, tidx] = decay
-                key_data[3, tidx] = cutlass.Float32(1.0) / decay
+                # Recover near-FP32 precision before reverse-state use.
+                reciprocal_decay = cute.arch.rcp_approx(decay)
+                reciprocal_decay *= cutlass.Float32(2.0) - decay * reciprocal_decay
+                key_data[3, tidx] = reciprocal_decay
                 key_data[4, tidx] = beta_value
             cute.arch.sync_threads()
 

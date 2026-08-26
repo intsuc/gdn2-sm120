@@ -21,9 +21,13 @@ and sequence gradients are cast to the corresponding input dtype.
 The two latency-bound positive-gamma inversions in chunk-local WY preparation
 and the terminal compact-WY parameter chain use the SM120 approximate
 reciprocal; their surrounding factor and gradient arithmetic remain FP32.
-Neither the ordered forward nor reverse state recurrence evaluates this
-approximation, so the public numerical contract is the validated BF16/FP16
-tolerance rather than bit-exact equivalence to precise FP32 division.
+The T>1 value-tiled short path and independent chunk-local backward use the
+same hardware reciprocal for `1 / exp(g)`, followed by one Newton refinement
+before the result enters reverse-state reconstruction. The correction recovers
+near-FP32 precision; the ordered d-state gradient recurrence continues to
+consume the FP32 decay itself. The public numerical contract is therefore the
+validated BF16/FP16 tolerance rather than bit-exact equivalence to precise FP32
+division. The fused T=1 path retains precise division.
 
 Gate activation and Q/K normalization intentionally sit outside the primitive.
 This makes the numerical contract small and lets the benchmark compare the
@@ -122,6 +126,16 @@ c = (e.T @ y) / (1 - e.T @ k)
 X = y + outer(k, c)
 S_previous = Diag(exp(-g)) X
 ```
+
+The T>1 value-tiled short path and the independent chunk-local VJPs compute the
+last factor with an SM120 reciprocal followed by one Newton step. This removes
+the precise divide from every cached key decay and squares the initial error,
+subject to FP32 rounding. The hardware reciprocal is flush-to-zero, so both
+`exp(g)` and its reciprocal must be normal finite values for this optimized
+reverse-reconstruction contract. The public primitive requires finite,
+non-positive `g` and every BT=16 prefix sum to remain safely above
+`ln(FLT_MIN)`, approximately `-87.34`; model log-decays remain far inside that
+range.
 
 Except for the fused T=1 path, the short final-state-only backward assigns one
 V8 value tile to each one-warp CTA. K-side inputs and gate evaluation are

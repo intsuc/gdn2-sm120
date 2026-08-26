@@ -63,112 +63,112 @@ CuTe-versus-official comparison.
 
 | Path | B | T | H | Warmup / samples | CuTe median | Official median | Speedup | max diff |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| chunk forward | 1 | 16 | 16 | 40 / 300 | 22.1 | 181.1 | **8.20x** | 1.55e-3 |
-| chunk forward | 1 | 64 | 16 | 40 / 300 | 33.3 | 181.6 | **5.46x** | 1.36e-3 |
-| chunk forward | 1 | 128 | 16 | 40 / 300 | 37.3 | 181.7 | **4.86x** | 1.60e-3 |
-| chunk forward | 1 | 256 | 16 | 40 / 300 | 47.6 | 181.5 | **3.82x** | 1.39e-3 |
-| chunk forward | 1 | 512 | 16 | 40 / 300 | 53.8 | 179.9 | **3.35x** | 1.43e-3 |
-| chunk forward | 1 | 1024 | 16 | 40 / 300 | 82.4 | 181.7 | **2.21x** | 1.37e-3 |
-| chunk forward | 1 | 2048 | 16 | 40 / 300 | 135.6 | 235.5 | **1.74x** | 1.40e-3 |
-| chunk forward | 1 | 4096 | 16 | 20 / 100 | 328.9 | 476.4 | **1.45x** | 1.38e-3 |
-| chunk forward | 1 | 8192 | 16 | 20 / 100 | 761.3 | 1035.3 | **1.36x** | 1.41e-3 |
-| chunk forward | 1 | 16384 | 16 | 10 / 50 | 1525.7 | 2115.5 | **1.39x** | 1.46e-3 |
-| chunk forward | 1 | 32768 | 16 | 10 / 50 | 3031.5 | 4235.5 | **1.40x** | 1.81e-3 |
-| chunk forward | 2 | 16 | 16 | 40 / 300 | 24.2 | 180.8 | **7.48x** | 1.55e-3 |
-| chunk forward | 2 | 64 | 16 | 40 / 300 | 37.3 | 183.2 | **4.92x** | 1.36e-3 |
-| chunk forward | 2 | 128 | 16 | 40 / 300 | 45.4 | 183.7 | **4.04x** | 1.62e-3 |
-| chunk forward | 2 | 256 | 16 | 40 / 300 | 59.9 | 181.0 | **3.02x** | 1.40e-3 |
-| chunk forward | 2 | 512 | 16 | 40 / 300 | 84.4 | 186.3 | **2.21x** | 1.51e-3 |
-| chunk forward | 2 | 1024 | 16 | 40 / 300 | 141.7 | 221.3 | **1.56x** | 1.35e-3 |
-| chunk forward | 2 | 2048 | 16 | 40 / 300 | 297.1 | 433.3 | **1.46x** | 1.47e-3 |
-| chunk forward | 2 | 4096 | 16 | 20 / 100 | 666.1 | 948.0 | **1.42x** | 1.36e-3 |
-| chunk forward | 2 | 8192 | 16 | 20 / 100 | 1326.0 | 1964.1 | **1.48x** | 1.48e-3 |
-| chunk forward | 2 | 16384 | 16 | 10 / 50 | 2645.9 | 3963.3 | **1.50x** | 2.00e-3 |
-| chunk forward | 2 | 32768 | 16 | 10 / 50 | 5339.1 | 7961.4 | **1.49x** | 1.51e-3 |
-| chunk forward | 4 | 16 | 16 | 40 / 300 | 26.1 | 181.6 | **6.95x** | 1.55e-3 |
-| chunk forward | 4 | 64 | 16 | 40 / 300 | 45.6 | 181.3 | **3.98x** | 1.57e-3 |
-| chunk forward | 4 | 128 | 16 | 40 / 300 | 61.9 | 184.7 | **2.99x** | 1.62e-3 |
-| chunk forward | 4 | 256 | 16 | 40 / 300 | 98.5 | 184.3 | **1.87x** | 1.68e-3 |
+| chunk forward | 1 | 16 | 16 | 40 / 300 | 22.0 | 180.0 | **8.16x** | 1.55e-3 |
+| chunk forward | 1 | 64 | 16 | 40 / 300 | 33.3 | 181.2 | **5.44x** | 1.36e-3 |
+| chunk forward | 1 | 128 | 16 | 40 / 300 | 37.1 | 179.4 | **4.84x** | 1.60e-3 |
+| chunk forward | 1 | 256 | 16 | 40 / 300 | 47.6 | 182.1 | **3.82x** | 1.39e-3 |
+| chunk forward | 1 | 512 | 16 | 40 / 300 | 53.8 | 183.3 | **3.41x** | 1.43e-3 |
+| chunk forward | 1 | 1024 | 16 | 40 / 300 | 82.4 | 183.5 | **2.23x** | 1.37e-3 |
+| chunk forward | 1 | 2048 | 16 | 40 / 300 | 135.6 | 235.8 | **1.74x** | 1.40e-3 |
+| chunk forward | 1 | 4096 | 16 | 20 / 100 | 329.6 | 476.4 | **1.45x** | 1.38e-3 |
+| chunk forward | 1 | 8192 | 16 | 20 / 100 | 761.0 | 1033.3 | **1.36x** | 1.41e-3 |
+| chunk forward | 1 | 16384 | 16 | 10 / 50 | 1524.5 | 2115.5 | **1.39x** | 1.46e-3 |
+| chunk forward | 1 | 32768 | 16 | 10 / 50 | 3033.0 | 4234.5 | **1.40x** | 1.81e-3 |
+| chunk forward | 2 | 16 | 16 | 40 / 300 | 24.1 | 181.2 | **7.52x** | 1.55e-3 |
+| chunk forward | 2 | 64 | 16 | 40 / 300 | 37.2 | 182.7 | **4.91x** | 1.36e-3 |
+| chunk forward | 2 | 128 | 16 | 40 / 300 | 44.6 | 182.1 | **4.08x** | 1.62e-3 |
+| chunk forward | 2 | 256 | 16 | 40 / 300 | 59.9 | 182.3 | **3.04x** | 1.40e-3 |
+| chunk forward | 2 | 512 | 16 | 40 / 300 | 84.4 | 183.8 | **2.18x** | 1.51e-3 |
+| chunk forward | 2 | 1024 | 16 | 40 / 300 | 141.8 | 221.3 | **1.56x** | 1.35e-3 |
+| chunk forward | 2 | 2048 | 16 | 40 / 300 | 297.0 | 433.4 | **1.46x** | 1.47e-3 |
+| chunk forward | 2 | 4096 | 16 | 20 / 100 | 665.8 | 949.1 | **1.43x** | 1.36e-3 |
+| chunk forward | 2 | 8192 | 16 | 20 / 100 | 1327.0 | 1964.0 | **1.48x** | 1.48e-3 |
+| chunk forward | 2 | 16384 | 16 | 10 / 50 | 2648.1 | 3965.3 | **1.50x** | 2.00e-3 |
+| chunk forward | 2 | 32768 | 16 | 10 / 50 | 5452.2 | 7959.2 | **1.46x** | 1.51e-3 |
+| chunk forward | 4 | 16 | 16 | 40 / 300 | 26.1 | 182.5 | **6.98x** | 1.55e-3 |
+| chunk forward | 4 | 64 | 16 | 40 / 300 | 45.5 | 180.6 | **3.97x** | 1.57e-3 |
+| chunk forward | 4 | 128 | 16 | 40 / 300 | 61.8 | 183.1 | **2.96x** | 1.62e-3 |
+| chunk forward | 4 | 256 | 16 | 40 / 300 | 98.4 | 182.9 | **1.86x** | 1.68e-3 |
 | chunk forward | 4 | 512 | 16 | 40 / 300 | 125.4 | 219.4 | **1.75x** | 1.56e-3 |
-| chunk forward | 4 | 1024 | 16 | 40 / 300 | 290.8 | 415.9 | **1.43x** | 1.60e-3 |
-| chunk forward | 4 | 2048 | 16 | 40 / 300 | 665.6 | 926.3 | **1.39x** | 1.63e-3 |
-| chunk forward | 4 | 4096 | 16 | 20 / 100 | 1301.6 | 1920.8 | **1.48x** | 1.49e-3 |
-| chunk forward | 4 | 8192 | 16 | 20 / 100 | 2557.9 | 3885.7 | **1.52x** | 2.06e-3 |
-| chunk forward | 4 | 16384 | 16 | 10 / 50 | 5104.7 | 7805.5 | **1.53x** | 2.22e-3 |
-| chunk forward | 4 | 32768 | 16 | 10 / 50 | 10181.6 | 15672.5 | **1.54x** | 1.83e-3 |
-| chunk backward | 1 | 16 | 16 | 40 / 300 | 115.0 | 276.3 | **2.40x** | 1.95e-3 |
-| chunk backward | 1 | 64 | 16 | 40 / 300 | 119.2 | 275.8 | **2.31x** | 2.14e-3 |
-| chunk backward | 1 | 128 | 16 | 40 / 300 | 116.4 | 277.9 | **2.39x** | 2.08e-3 |
-| chunk backward | 1 | 256 | 16 | 40 / 300 | 121.2 | 282.2 | **2.33x** | 2.44e-3 |
-| chunk backward | 1 | 512 | 16 | 40 / 300 | 132.5 | 283.3 | **2.14x** | 2.93e-3 |
-| chunk backward | 1 | 1024 | 16 | 40 / 300 | 255.0 | 393.1 | **1.54x** | 2.01e-3 |
-| chunk backward | 1 | 2048 | 16 | 40 / 300 | 553.9 | 708.8 | **1.28x** | 3.91e-3 |
-| chunk backward | 1 | 4096 | 16 | 20 / 100 | 1226.5 | 1466.1 | **1.20x** | 3.91e-3 |
-| chunk backward | 1 | 8192 | 16 | 20 / 100 | 2586.2 | 3133.5 | **1.21x** | 2.93e-3 |
-| chunk backward | 1 | 16384 | 16 | 10 / 50 | 5280.0 | 6355.8 | **1.20x** | 3.91e-3 |
-| chunk backward | 1 | 32768 | 16 | 10 / 50 | 10662.4 | 12628.6 | **1.18x** | 3.91e-3 |
-| chunk backward | 2 | 16 | 16 | 40 / 300 | 119.0 | 275.2 | **2.31x** | 2.44e-3 |
-| chunk backward | 2 | 64 | 16 | 40 / 300 | 120.6 | 279.8 | **2.32x** | 2.14e-3 |
-| chunk backward | 2 | 128 | 16 | 40 / 300 | 121.2 | 280.8 | **2.32x** | 2.93e-3 |
-| chunk backward | 2 | 256 | 16 | 40 / 300 | 131.6 | 279.9 | **2.13x** | 2.44e-3 |
-| chunk backward | 2 | 512 | 16 | 40 / 300 | 239.6 | 390.9 | **1.63x** | 3.91e-3 |
-| chunk backward | 2 | 1024 | 16 | 40 / 300 | 518.0 | 641.8 | **1.24x** | 2.44e-3 |
-| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1182.7 | 1309.7 | **1.11x** | 2.93e-3 |
-| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2459.6 | 2826.2 | **1.15x** | 3.91e-3 |
-| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5052.3 | 5742.5 | **1.14x** | 3.91e-3 |
-| chunk backward | 2 | 16384 | 16 | 10 / 50 | 10182.0 | 11411.0 | **1.12x** | 3.91e-3 |
-| chunk backward | 2 | 32768 | 16 | 10 / 50 | 20451.7 | 23037.2 | **1.13x** | 3.91e-3 |
-| chunk backward | 4 | 16 | 16 | 40 / 300 | 134.5 | 279.7 | **2.08x** | 2.44e-3 |
-| chunk backward | 4 | 64 | 16 | 40 / 300 | 129.6 | 279.1 | **2.15x** | 3.91e-3 |
-| chunk backward | 4 | 128 | 16 | 40 / 300 | 131.6 | 279.7 | **2.13x** | 3.91e-3 |
-| chunk backward | 4 | 256 | 16 | 40 / 300 | 231.5 | 388.3 | **1.68x** | 3.91e-3 |
-| chunk backward | 4 | 512 | 16 | 40 / 300 | 504.0 | 622.5 | **1.24x** | 3.91e-3 |
-| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1145.7 | 1252.3 | **1.09x** | 3.91e-3 |
-| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2377.9 | 2714.6 | **1.14x** | 3.91e-3 |
-| chunk backward | 4 | 4096 | 16 | 20 / 100 | 4875.7 | 5509.9 | **1.13x** | 3.91e-3 |
-| chunk backward | 4 | 8192 | 16 | 20 / 100 | 9803.2 | 10978.3 | **1.12x** | 3.91e-3 |
-| chunk backward | 4 | 16384 | 16 | 10 / 50 | 19652.4 | 22177.1 | **1.13x** | 3.91e-3 |
-| token forward | 1 | 1 | 16 | 25 / 100 | 13.1 | 25.0 | **1.91x** | 2.24e-8 |
-| token forward | 1 | 2 | 16 | 25 / 100 | 13.1 | 24.8 | **1.90x** | 2.98e-8 |
-| token forward | 1 | 4 | 16 | 25 / 100 | 14.8 | 27.0 | **1.82x** | 5.96e-8 |
+| chunk forward | 4 | 1024 | 16 | 40 / 300 | 290.0 | 415.9 | **1.43x** | 1.60e-3 |
+| chunk forward | 4 | 2048 | 16 | 40 / 300 | 665.7 | 926.8 | **1.39x** | 1.63e-3 |
+| chunk forward | 4 | 4096 | 16 | 20 / 100 | 1300.6 | 1921.0 | **1.48x** | 1.49e-3 |
+| chunk forward | 4 | 8192 | 16 | 20 / 100 | 2565.0 | 3886.0 | **1.52x** | 2.06e-3 |
+| chunk forward | 4 | 16384 | 16 | 10 / 50 | 5094.7 | 7803.7 | **1.53x** | 2.22e-3 |
+| chunk forward | 4 | 32768 | 16 | 10 / 50 | 10199.3 | 15670.6 | **1.54x** | 1.83e-3 |
+| chunk backward | 1 | 16 | 16 | 40 / 300 | 106.0 | 278.1 | **2.62x** | 1.95e-3 |
+| chunk backward | 1 | 64 | 16 | 40 / 300 | 120.1 | 279.1 | **2.32x** | 2.14e-3 |
+| chunk backward | 1 | 128 | 16 | 40 / 300 | 116.7 | 281.2 | **2.41x** | 2.08e-3 |
+| chunk backward | 1 | 256 | 16 | 40 / 300 | 121.2 | 277.9 | **2.29x** | 2.44e-3 |
+| chunk backward | 1 | 512 | 16 | 40 / 300 | 132.5 | 281.7 | **2.13x** | 2.93e-3 |
+| chunk backward | 1 | 1024 | 16 | 40 / 300 | 255.0 | 400.4 | **1.57x** | 2.01e-3 |
+| chunk backward | 1 | 2048 | 16 | 40 / 300 | 553.9 | 707.5 | **1.28x** | 3.91e-3 |
+| chunk backward | 1 | 4096 | 16 | 20 / 100 | 1228.2 | 1466.4 | **1.19x** | 3.91e-3 |
+| chunk backward | 1 | 8192 | 16 | 20 / 100 | 2580.5 | 3131.3 | **1.21x** | 2.93e-3 |
+| chunk backward | 1 | 16384 | 16 | 10 / 50 | 5264.3 | 6356.5 | **1.21x** | 3.91e-3 |
+| chunk backward | 1 | 32768 | 16 | 10 / 50 | 10613.1 | 12592.6 | **1.19x** | 3.91e-3 |
+| chunk backward | 2 | 16 | 16 | 40 / 300 | 111.0 | 279.0 | **2.51x** | 2.44e-3 |
+| chunk backward | 2 | 64 | 16 | 40 / 300 | 121.2 | 279.5 | **2.31x** | 2.14e-3 |
+| chunk backward | 2 | 128 | 16 | 40 / 300 | 121.1 | 279.4 | **2.31x** | 2.93e-3 |
+| chunk backward | 2 | 256 | 16 | 40 / 300 | 131.6 | 280.1 | **2.13x** | 2.44e-3 |
+| chunk backward | 2 | 512 | 16 | 40 / 300 | 239.6 | 391.2 | **1.63x** | 3.91e-3 |
+| chunk backward | 2 | 1024 | 16 | 40 / 300 | 517.2 | 644.1 | **1.25x** | 2.44e-3 |
+| chunk backward | 2 | 2048 | 16 | 40 / 300 | 1212.6 | 1308.7 | **1.08x** | 2.93e-3 |
+| chunk backward | 2 | 4096 | 16 | 20 / 100 | 2435.8 | 2780.1 | **1.14x** | 3.91e-3 |
+| chunk backward | 2 | 8192 | 16 | 20 / 100 | 5043.6 | 5740.2 | **1.14x** | 3.91e-3 |
+| chunk backward | 2 | 16384 | 16 | 10 / 50 | 10187.2 | 11412.9 | **1.12x** | 3.91e-3 |
+| chunk backward | 2 | 32768 | 16 | 10 / 50 | 20464.5 | 23016.4 | **1.12x** | 3.91e-3 |
+| chunk backward | 4 | 16 | 16 | 40 / 300 | 131.4 | 278.1 | **2.12x** | 2.44e-3 |
+| chunk backward | 4 | 64 | 16 | 40 / 300 | 129.5 | 280.2 | **2.16x** | 3.91e-3 |
+| chunk backward | 4 | 128 | 16 | 40 / 300 | 131.6 | 278.0 | **2.11x** | 3.91e-3 |
+| chunk backward | 4 | 256 | 16 | 40 / 300 | 231.6 | 392.1 | **1.69x** | 3.91e-3 |
+| chunk backward | 4 | 512 | 16 | 40 / 300 | 504.7 | 626.6 | **1.24x** | 3.91e-3 |
+| chunk backward | 4 | 1024 | 16 | 40 / 300 | 1144.9 | 1252.2 | **1.09x** | 3.91e-3 |
+| chunk backward | 4 | 2048 | 16 | 40 / 300 | 2378.8 | 2713.6 | **1.14x** | 3.91e-3 |
+| chunk backward | 4 | 4096 | 16 | 20 / 100 | 4875.0 | 5514.1 | **1.13x** | 3.91e-3 |
+| chunk backward | 4 | 8192 | 16 | 20 / 100 | 9800.6 | 10922.8 | **1.11x** | 3.91e-3 |
+| chunk backward | 4 | 16384 | 16 | 10 / 50 | 19672.0 | 22178.2 | **1.13x** | 3.91e-3 |
+| token forward | 1 | 1 | 16 | 25 / 100 | 13.0 | 24.9 | **1.91x** | 2.24e-8 |
+| token forward | 1 | 2 | 16 | 25 / 100 | 13.0 | 25.0 | **1.92x** | 2.98e-8 |
+| token forward | 1 | 4 | 16 | 25 / 100 | 14.8 | 26.9 | **1.81x** | 5.96e-8 |
 | token forward | 1 | 8 | 16 | 25 / 100 | 16.9 | 29.1 | **1.72x** | 6.71e-8 |
-| token forward | 1 | 16 | 16 | 25 / 100 | 21.0 | 35.1 | **1.67x** | 1.91e-6 |
-| token forward | 1 | 32 | 16 | 25 / 100 | 27.2 | 46.7 | **1.72x** | 1.53e-5 |
-| token forward | 1 | 64 | 16 | 25 / 100 | 41.7 | 72.1 | **1.73x** | 1.26e-3 |
-| token forward | 1 | 128 | 16 | 25 / 100 | 45.5 | 121.2 | **2.66x** | 8.52e-4 |
-| token forward | 2 | 1 | 16 | 25 / 100 | 13.1 | 24.6 | **1.88x** | 2.98e-8 |
-| token forward | 2 | 2 | 16 | 25 / 100 | 14.8 | 24.6 | **1.66x** | 2.98e-8 |
-| token forward | 2 | 4 | 16 | 25 / 100 | 14.9 | 26.7 | **1.79x** | 1.91e-6 |
-| token forward | 2 | 8 | 16 | 25 / 100 | 17.0 | 29.2 | **1.71x** | 9.54e-7 |
-| token forward | 2 | 16 | 16 | 25 / 100 | 23.1 | 35.3 | **1.53x** | 1.91e-6 |
-| token forward | 2 | 32 | 16 | 25 / 100 | 31.3 | 47.5 | **1.52x** | 3.05e-5 |
-| token forward | 2 | 64 | 16 | 25 / 100 | 44.3 | 71.2 | **1.61x** | 1.26e-3 |
-| token forward | 2 | 128 | 16 | 25 / 100 | 52.7 | 121.1 | **2.30x** | 9.96e-4 |
-| token forward | 4 | 1 | 16 | 25 / 100 | 14.8 | 24.7 | **1.67x** | 2.98e-8 |
-| token forward | 4 | 2 | 16 | 25 / 100 | 14.9 | 24.7 | **1.65x** | 1.19e-7 |
-| token forward | 4 | 4 | 16 | 25 / 100 | 16.9 | 27.9 | **1.65x** | 1.91e-6 |
-| token forward | 4 | 8 | 16 | 25 / 100 | 19.1 | 30.2 | **1.59x** | 3.05e-5 |
-| token forward | 4 | 16 | 16 | 25 / 100 | 25.1 | 38.1 | **1.52x** | 3.05e-5 |
+| token forward | 1 | 16 | 16 | 25 / 100 | 21.0 | 35.3 | **1.68x** | 1.91e-6 |
+| token forward | 1 | 32 | 16 | 25 / 100 | 27.2 | 46.6 | **1.71x** | 1.53e-5 |
+| token forward | 1 | 64 | 16 | 25 / 100 | 42.1 | 72.0 | **1.71x** | 1.26e-3 |
+| token forward | 1 | 128 | 16 | 25 / 100 | 45.6 | 120.3 | **2.64x** | 8.52e-4 |
+| token forward | 2 | 1 | 16 | 25 / 100 | 13.0 | 25.0 | **1.92x** | 2.98e-8 |
+| token forward | 2 | 2 | 16 | 25 / 100 | 14.9 | 24.9 | **1.68x** | 2.98e-8 |
+| token forward | 2 | 4 | 16 | 25 / 100 | 14.9 | 26.1 | **1.75x** | 1.91e-6 |
+| token forward | 2 | 8 | 16 | 25 / 100 | 17.6 | 29.1 | **1.65x** | 9.54e-7 |
+| token forward | 2 | 16 | 16 | 25 / 100 | 23.0 | 35.1 | **1.53x** | 1.91e-6 |
+| token forward | 2 | 32 | 16 | 25 / 100 | 31.3 | 46.6 | **1.49x** | 3.05e-5 |
+| token forward | 2 | 64 | 16 | 25 / 100 | 43.6 | 71.2 | **1.63x** | 1.26e-3 |
+| token forward | 2 | 128 | 16 | 25 / 100 | 52.1 | 120.2 | **2.31x** | 9.96e-4 |
+| token forward | 4 | 1 | 16 | 25 / 100 | 14.8 | 25.1 | **1.69x** | 2.98e-8 |
+| token forward | 4 | 2 | 16 | 25 / 100 | 14.9 | 24.8 | **1.66x** | 1.19e-7 |
+| token forward | 4 | 4 | 16 | 25 / 100 | 16.9 | 27.5 | **1.62x** | 1.91e-6 |
+| token forward | 4 | 8 | 16 | 25 / 100 | 20.8 | 30.2 | **1.45x** | 3.05e-5 |
+| token forward | 4 | 16 | 16 | 25 / 100 | 25.1 | 38.2 | **1.52x** | 3.05e-5 |
 | token forward | 4 | 32 | 16 | 25 / 100 | 35.3 | 50.7 | **1.44x** | 6.10e-5 |
-| token forward | 4 | 64 | 16 | 25 / 100 | 53.7 | 78.2 | **1.46x** | 1.26e-3 |
-| token forward | 4 | 128 | 16 | 25 / 100 | 68.8 | 132.7 | **1.93x** | 1.12e-3 |
+| token forward | 4 | 64 | 16 | 25 / 100 | 53.7 | 78.0 | **1.45x** | 1.26e-3 |
+| token forward | 4 | 128 | 16 | 25 / 100 | 69.9 | 132.6 | **1.90x** | 1.12e-3 |
 
 Forward stays ahead at every measured B1/B2/B4 point through T=32768; its
-longest-sequence speedups are 1.40x, 1.49x, and 1.54x respectively. Backward is
+longest-sequence speedups are 1.40x, 1.46x, and 1.54x respectively. Backward is
 also ahead at every supported measured point: all 11 B1 and B2 lengths and all
-10 B4 lengths through T=16384. The narrowest measured margin is 1.0930x at
-B4/T1024.
+10 B4 lengths through T=16384. The narrowest measured margin is 1.0793x at
+B2/T2048.
 
 The canonical B1/H16 T=64 point supplies 64 chunk-head CTAs and therefore takes
 the CTA-aware compact-WY parameter VJP, together with the T=64 MMA boundary
-scan. T=128 additionally enables compact BF16 checkpoints and measures 116.4 us.
+scan. T=128 additionally enables compact BF16 checkpoints and measures 116.7 us.
 The checkpointed path removes the old T=128 correctness cap. B4/T32768
 backward is unsupported and not benchmarked because one saved state-boundary
 tensor exceeds CuTe's 4-GiB per-launch byte-address range.
 
 Token forward is ahead at all 24 measured H16 points. Its public-call speedup
-at T=1 is 1.91x, 1.88x, and 1.67x for B1, B2, and B4 respectively; at T=128 it
-is 2.66x, 2.30x, and 1.93x. These rows include the default output and
+at T=1 is 1.91x, 1.92x, and 1.69x for B1, B2, and B4 respectively; at T=128 it
+is 2.64x, 2.31x, and 1.90x. These rows include the default output and
 final-state allocations on both public paths.
 
 For full-chunk BF16 training at T>=128, forward checkpoints Y, raw Q-gamma,
@@ -212,6 +212,72 @@ additional points in the canonical publication schema. Unless noted otherwise,
 they use the same workstation, normalized BF16 Q/K, FP32 `g`/state, and
 `scale=0.125` as the canonical suite. Medians and minima are synchronized CUDA
 event microseconds.
+
+### Current bottleneck audit and refined reverse reciprocal
+
+Nsight Systems isolated the current dominant GPU stages before this round of
+changes. Hardware-counter collection was unavailable on the host, so the
+percentages below are CUDA timeline shares rather than derived occupancy or
+memory-throughput estimates.
+
+| Public shape | Dominant GPU work | Median | Share of kernel sum |
+|---|---|---:|---:|
+| chunk forward B1/T8192/H16 | ordered inter-chunk scan | 501.7 us | 67.7% |
+| chunk forward B1/T8192/H16 | independent WY preparation | 239.0 us | 32.3% |
+| chunk backward B4/T1024/H16 | dual dQ-gamma/dY MMA | 255.4 us | 23.7% |
+| chunk backward B4/T1024/H16 | reverse boundary scan | 210.4 us | 19.5% |
+| chunk backward B4/T1024/H16 | compact terminal chain | 201.8 us | 18.6% |
+| token forward B4/T32/H16 | recurrent kernel | 24.1 us | 68.3% of public call |
+
+The three leading long-backward stages account for 61.8% of its approximately
+1.08 ms kernel sum. Controlled experiments with wider boundary tiles, split or
+fused terminal reductions, extra scan warps, reduced shared precision, and
+smaller preparation CTAs did not improve the corresponding full calls, so none
+of those schedule changes is retained.
+
+The short backward exposed a separate instruction bottleneck. Its value-tiled
+kernel cached `exp(g)` and evaluated a precise reciprocal for every key and
+reverse token. At B1/T32/H16 that kernel occupied 75.392 of 78.079 us of GPU
+work (96.6%). The optimized path issues the SM120 hardware reciprocal and then
+applies one Newton correction,
+
+```text
+r0 = rcp_approx(decay)
+r1 = r0 * (2 - decay * r0)
+```
+
+before `r1` enters the ordered forward-state reconstruction. The correction
+squares the initial reciprocal error, while removing the long precise-divide
+instruction sequence. Same-process alternating public-call measurements were:
+
+| B | T | Precise divide | Refined reciprocal | Change |
+|---:|---:|---:|---:|---:|
+| 1 | 16 | 116.928 | 109.216 | **-6.60%** |
+| 1 | 32 | 155.568 | 139.264 | **-10.48%** |
+| 1 | 63 | 232.560 | 202.736 | **-12.82%** |
+| 2 | 16 | 118.992 | 112.704 | **-5.28%** |
+| 2 | 32 | 162.912 | 149.568 | **-8.19%** |
+| 2 | 63 | 282.256 | 254.992 | **-9.66%** |
+| 4 | 16 | 136.224 | 133.920 | **-1.69%** |
+| 4 | 32 | 194.688 | 190.640 | **-2.08%** |
+| 4 | 63 | 388.800 | 324.288 | **-16.59%** |
+
+At B1/T63/H16, the main kernel itself fell from 143.742 to 113.534 us
+(-21.0%), while its 130 registers/thread, 256-CTA grid, and approximately
+7-KiB shared allocation were unchanged. Chunk-local T65--127 VJPs reset their
+reconstruction from an FP32 boundary every 16 tokens and use the same refined
+reciprocal. Direct local-VJP reductions ranged from 5.0% to 27.4%; the larger
+full-value schedule improved by 1.0--1.5%. For example, public B1/T96 backward
+fell from 246.792 to 196.512 us (-20.37%).
+
+Across B1/B2/B4 and T16/32/63/65/96/127, every gradient remained finite. The
+largest exact-versus-refined absolute difference was `9.766e-4`, maximum
+relative L2 error was `8.62e-5`, and `dv`, `dw`, and `d_initial_state` were
+bit-identical. Reference-autograd and proven chunk-local checks retain their
+existing tolerances. Because `rcp_approx` is flush-to-zero, this optimized
+reconstruction assumes `exp(g)` is a normal positive FP32 value; production
+log-decays keep both `exp(g)` and its reciprocal normal finite, far from either
+subnormal boundary.
 
 ### Forward preparation and terminal-chain reciprocal
 
@@ -571,9 +637,9 @@ between old and new measurements.
 
 The optimization goal is met across every supported measured chunk point.
 Chunk forward is faster at all 33 B1/B2/B4 lengths through T=32768; its
-narrowest margin is 1.3599x at B1/T8192. Backward is faster at all 11 B1 and
+narrowest margin is 1.3578x at B1/T8192. Backward is faster at all 11 B1 and
 B2 lengths and all 10 measured B4 lengths through T=16384; its narrowest
-margin is 1.0930x at B4/T1024. B4/T32768 is outside
+margin is 1.0793x at B2/T2048. B4/T32768 is outside
 the current CuTe per-launch address range and is excluded. Token forward is
 measured over the same fixed-H16 B1/B2/B4 batch matrix and is faster at all 24
 points through T=128.

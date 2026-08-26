@@ -130,6 +130,13 @@ variable-length sequences, and fused gate activation are not yet part of this
 first specialization. Unsupported devices and shapes fail explicitly; there
 is no silent fallback.
 
+`g` must contain finite, non-positive log-decays. Within every BT=16 chunk,
+each prefix `exp(cumsum(g))` must remain a normal positive FP32 value; keeping
+the prefix sum safely above `ln(FLT_MIN)`, approximately `-87.34`, satisfies
+that requirement. The SM120 reciprocal instructions flush subnormal inputs and
+results, so maintaining this model-value invariant is the caller's
+responsibility.
+
 For gradient-enabled calls of 64 tokens or more, the forward saves states at
 every BT=16 boundary. At `T >= 128`, sequence auxiliaries are compact even
 when the sequence has a partial tail. Full-chunk BF16 sequences use compact
@@ -214,10 +221,13 @@ E/K-bar MMA operands use BF16, while the value auxiliary, chunk decay, and
 gamma remain FP32.
 The latency-bound positive-gamma inversions in forward WY preparation and the
 terminal compact-WY parameter chain use the SM120 approximate reciprocal while
-their surrounding factor and gradient arithmetic remain FP32. Neither the
-ordered forward nor reverse state recurrence evaluates this approximation;
-results follow the validated BF16/FP16 tolerance contract rather than bit-exact
-equivalence to precise FP32 division.
+their surrounding factor and gradient arithmetic remain FP32. The T>1
+value-tiled short path and independent chunk-local backward refine the hardware
+reciprocal of `exp(g)` once with Newton's method before reconstructing a
+previous state; the ordered d-state gradient recurrence still uses the FP32
+decay itself, and the fused T=1 path retains precise division. Results follow
+the validated BF16/FP16 tolerance contract rather than bit-exact equivalence to
+precise FP32 division.
 Forward-only BF16 calls use the rearranged output identity from three full
 chunks onward, moving the independent A-qk products out of the ordered state
 scan. The WY preparation skips unused upper-triangular products and balances
@@ -270,7 +280,7 @@ B1/B2/B4, H16 BF16 sweeps, chunk forward remains faster than the official path
 at all 33 sampled lengths through T=32768. Chunk backward remains faster for
 all 11 B1 and B2 points and all 10 measured B4 points through T=16384. The
 narrowest forward and backward margins are 1.36x at B1/T8192 and
-1.09x at B4/T1024, respectively. B4/T32768 backward is not benchmarked
+1.08x at B2/T2048, respectively. B4/T32768 backward is not benchmarked
 because one saved state-boundary tensor exceeds CuTe's 4-GiB per-launch
 byte-address range. Token forward is measured with the same fixed H16 and
 B1/B2/B4 batch matrix and remains faster at all 24 points through T=128. The

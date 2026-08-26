@@ -462,7 +462,11 @@ def _chunk_backward_value_tiled_kernel(
             key_data[0, cache_key] = key_value
             key_data[1, cache_key] = beta_value * key_value
             key_data[2, cache_key] = decay
-            key_data[3, cache_key] = cutlass.Float32(1.0) / decay
+            # One Newton step recovers near-FP32 reciprocal precision while
+            # keeping reverse reconstruction off the long divide path.
+            inverse_decay = cute.arch.rcp_approx(decay)
+            inverse_decay *= cutlass.Float32(2.0) - decay * inverse_decay
+            key_data[3, cache_key] = inverse_decay
             key_data[4, cache_key] = beta_value
         cute.arch.sync_warp()
 

@@ -240,7 +240,9 @@ def chunk_gdn2(
     FP32 ``[B, H, 128, 128]``. Gate activations and Q/K normalization remain
     caller-side operations. Gradient-enabled shapes whose saved boundary tensor
     exceeds the CuTe 4-GiB per-launch address range are rejected rather than
-    split into multiple autograd calls.
+    split into multiple autograd calls. ``g`` must be finite and non-positive,
+    with every BT=16 prefix ``exp(cumsum(g))`` remaining a normal positive FP32
+    value.
     """
 
     output_scale = float(scale) if scale is not None else 1.0 / math.sqrt(_DIM)
